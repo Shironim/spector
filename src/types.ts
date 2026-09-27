@@ -1,0 +1,91 @@
+export interface ConsoleLogEntry {
+  type: string;
+  text: string;
+  timestamp: string;
+  location?: string;
+}
+
+export interface NetworkLogEntry {
+  id: string;
+  method: string;
+  url: string;
+  resourceType: string;
+  status?: number;
+  statusText?: string;
+  contentType?: string;
+  durationMs?: number;
+  timestamp: string;
+  error?: string;
+  requestBodySummary?: string;
+  responseBodySummary?: string;
+}
+
+export interface CompressedDomNode {
+  tag: string;
+  role?: string;
+  name?: string;
+  id?: string;
+  classes?: string[];
+  type?: string;
+  value?: string;
+  href?: string;
+  placeholder?: string;
+  ariaLabel?: string;
+  box?: {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  };
+  children?: CompressedDomNode[];
+}
+
+export interface ActiveTabInfo {
+  title: string;
+  url: string;
+  viewport: {
+    width: number;
+    height: number;
+  } | null;
+}
+
+export interface TabInfo {
+  index: number;
+  title: string;
+  url: string;
+  isActive: boolean;
+}
+
+export interface FrameworkComponentInfo {
+  framework: 'vue' | 'react' | 'svelte' | 'angular' | 'unknown';
+  componentName?: string;
+  sourceFile?: string;
+  sourceLine?: number;
+  props?: string[];
+}
+
+export interface TabSelectCriteria {
+  index?: number;
+  url?: string;
+  urlPattern?: string;
+  title?: string;
+  debugSessionId?: string;
+}
+
+export interface PickedElementInfo {
+  status: 'selected' | 'cancelled' | 'timeout';
+  selector?: string;
+  tagName?: string;
+  rect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  };
+  computedStyles?: Record<string, string>;
+  domTree?: string;
+  screenshotBase64?: string;
+  frameworkComponent?: FrameworkComponentInfo;
+  timestamp?: string;
+}
+
