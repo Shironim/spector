@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.septum/
+.strata/
+.gemini/
+.verity/
+.agents/
+
+# Septum local database and cache
+.septum/*.db*
+
+
+

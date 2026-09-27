@@ -1,0 +1,55 @@
+{
+  "name": "@dimassetoid/spector",
+  "version": "1.0.0",
+  "description": "Standalone Browser Sharing & Visual Element Inspector MCP Server",
+  "type": "module",
+  "main": "dist/index.js",
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "spector": "./dist/index.js",
+    "spector-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "browser",
+    "cdp",
+    "playwright",
+    "inspector",
+    "ai-agent",
+    "claude",
+    "cursor"
+  ],
+  "author": "Dimas Seto",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dimasseto/spector.git"
+  },
+  "homepage": "https://github.com/dimasseto/spector#readme",
+  "bugs": {
+    "url": "https://github.com/dimasseto/spector/issues"
+  },
+  "scripts": {
+    "build": "bun build ./src/index.ts --outdir ./dist --target node --external playwright-core --external @modelcontextprotocol/sdk --external zod",
+    "build:tsc": "tsc",
+    "prepack": "npm run build",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.6.1",
+    "playwright-core": "^1.50.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3"
+  }
+}
