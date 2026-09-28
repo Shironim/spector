@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
+import { textResponse, type McpToolContent } from '../types.js';
 
 export function registerPickerTool(server: McpServer): void {
   const pickElementHandler = async ({ timeoutMs, includeScreenshot, includeStyles }: any) => {
@@ -12,28 +13,14 @@ export function registerPickerTool(server: McpServer): void {
     );
 
     if (result.status === 'cancelled') {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Pemilihan elemen dibatalkan oleh pengguna (Esc ditekan).'
-          }
-        ]
-      };
+      return textResponse('Pemilihan elemen dibatalkan oleh pengguna (Esc ditekan).');
     }
 
     if (result.status === 'timeout') {
-      return {
-        content: [
-          {
-            type: 'text',
-            text: 'Waktu pemilihan elemen habis (timeout). Tidak ada elemen yang diklik.'
-          }
-        ]
-      };
+      return textResponse('Waktu pemilihan elemen habis (timeout). Tidak ada elemen yang diklik.');
     }
 
-    const contentBlocks: any[] = [
+    const contentBlocks: McpToolContent[] = [
       {
         type: 'text',
         text: JSON.stringify(

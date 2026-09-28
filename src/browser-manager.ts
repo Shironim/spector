@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Page, type Request } from 'playwright-core';
 import type { ActiveTabInfo, ConsoleLogEntry, NetworkLogEntry, TabInfo, PickedElementInfo, TabSelectCriteria } from './types.js';
 import { extractCompressedDom } from './utils/dom-compressor.js';
 import { IN_BROWSER_COMPONENT_DETECTOR_FN } from './utils/framework-detector.js';
@@ -71,7 +71,7 @@ export class BrowserManager {
   private lastPickedElement: PickedElementInfo | null = null;
   private lastDomSnapshot: DomSnapshotData | null = null;
   private pendingRequests = new Map<
-    string,
+    Request,
     { start: number; method: string; url: string; resourceType: string; postData?: string }
   >();
   private attachedPages = new WeakSet<Page>();
@@ -79,6 +79,16 @@ export class BrowserManager {
   private readonly MAX_LOG_BUFFER = 100;
 
   private constructor() {}
+
+  private sanitizePostData(raw?: string | null): string | undefined {
+    if (!raw) return undefined;
+    let text = raw.length > 500 ? raw.slice(0, 497) + '...' : raw;
+    // Redact sensitive credentials and tokens in telemetry logs
+    return text.replace(
+      /(["']?(?:password|passwd|token|secret|apiKey|api_key|authorization|bearer|credit_card|cvv)["']?\s*[:=]\s*["']?)([^"',\s&]+)(["']?)/gi,
+      '$1[REDACTED]$3'
+    );
+  }
 
   public static getInstance(): BrowserManager {
     if (!BrowserManager.instance) {
@@ -148,6 +158,7 @@ export class BrowserManager {
 
       // Multi-tab listener: Automatically wire up listeners and hotkey for any new tabs opened in this window
       this.context.on('page', (newPage: Page) => {
+        this.page = newPage; // Auto-align active pointer to newly opened tab (e.g. target="_blank" or window.open)
         const wireUpNewPage = () => {
           if (!newPage.isClosed()) {
             this.setupPageListeners(newPage);
@@ -257,11 +268,23 @@ export class BrowserManager {
     this.setupHotkeyPicker(page).catch(() => {});
 
     page.on('console', msg => {
+      const type = msg.type();
+      const text = msg.text();
+      const location = msg.location().url ? `${msg.location().url}:${msg.location().lineNumber}` : undefined;
+
+      const last = this.consoleLogs[this.consoleLogs.length - 1];
+      if (last && last.type === type && last.text === text && last.location === location) {
+        last.count = (last.count || 1) + 1;
+        last.timestamp = new Date().toISOString();
+        return;
+      }
+
       const entry: ConsoleLogEntry = {
-        type: msg.type(),
-        text: msg.text(),
+        type,
+        text,
         timestamp: new Date().toISOString(),
-        location: msg.location().url ? `${msg.location().url}:${msg.location().lineNumber}` : undefined
+        location,
+        count: 1
       };
       this.consoleLogs.push(entry);
       if (this.consoleLogs.length > this.MAX_LOG_BUFFER) {
@@ -270,10 +293,19 @@ export class BrowserManager {
     });
 
     page.on('pageerror', error => {
+      const text = `Uncaught Exception: ${error.message}\n${error.stack || ''}`;
+      const last = this.consoleLogs[this.consoleLogs.length - 1];
+      if (last && last.type === 'error' && last.text === text) {
+        last.count = (last.count || 1) + 1;
+        last.timestamp = new Date().toISOString();
+        return;
+      }
+
       const entry: ConsoleLogEntry = {
         type: 'error',
-        text: `Uncaught Exception: ${error.message}\n${error.stack || ''}`,
-        timestamp: new Date().toISOString()
+        text,
+        timestamp: new Date().toISOString(),
+        count: 1
       };
       this.consoleLogs.push(entry);
       if (this.consoleLogs.length > this.MAX_LOG_BUFFER) {
@@ -283,14 +315,12 @@ export class BrowserManager {
 
     page.on('request', req => {
       try {
-        const id = `${req.method()}-${req.url()}-${Date.now()}`;
-        const postData = req.postData();
-        this.pendingRequests.set(req.url(), {
+        this.pendingRequests.set(req, {
           start: Date.now(),
           method: req.method(),
           url: req.url(),
           resourceType: req.resourceType(),
-          postData: postData ? (postData.length > 500 ? postData.slice(0, 497) + '...' : postData) : undefined
+          postData: this.sanitizePostData(req.postData())
         });
       } catch {
         // Safe guard against disposed request
@@ -299,10 +329,11 @@ export class BrowserManager {
 
     page.on('response', async res => {
       try {
-        const reqUrl = res.url();
-        const pending = this.pendingRequests.get(reqUrl);
+        const req = res.request();
+        const reqUrl = req.url();
+        const pending = this.pendingRequests.get(req);
         const duration = pending ? Date.now() - pending.start : undefined;
-        this.pendingRequests.delete(reqUrl);
+        this.pendingRequests.delete(req);
 
         let responseSummary = '';
         const contentType = res.headers()['content-type'] || '';
@@ -330,9 +361,9 @@ export class BrowserManager {
 
         const entry: NetworkLogEntry = {
           id: `${res.status()}-${Date.now()}`,
-          method: res.request().method(),
+          method: req.method(),
           url: reqUrl,
-          resourceType: res.request().resourceType(),
+          resourceType: req.resourceType(),
           status: res.status(),
           statusText: res.statusText(),
           contentType,
@@ -354,9 +385,9 @@ export class BrowserManager {
     page.on('requestfailed', req => {
       try {
         const reqUrl = req.url();
-        const pending = this.pendingRequests.get(reqUrl);
+        const pending = this.pendingRequests.get(req);
         const duration = pending ? Date.now() - pending.start : undefined;
-        this.pendingRequests.delete(reqUrl);
+        this.pendingRequests.delete(req);
 
         const entry: NetworkLogEntry = {
           id: `fail-${Date.now()}`,
@@ -385,9 +416,13 @@ export class BrowserManager {
     });
   }
 
-  public async getDomTree(selector?: string, includeBoundingBox: boolean = true): Promise<string> {
+  public async getDomTree(
+    selector?: string,
+    includeBoundingBox: boolean = true,
+    includeOffscreen: boolean = false
+  ): Promise<string> {
     const page = await this.ensurePage();
-    return await extractCompressedDom(page, { selector, includeBoundingBox });
+    return await extractCompressedDom(page, { selector, includeBoundingBox, includeOffscreen });
   }
 
   public async captureScreenshot(selector?: string, fullPage: boolean = false): Promise<Buffer> {
@@ -511,9 +546,17 @@ export class BrowserManager {
   public getNetworkLogs(
     filter?: string,
     clearAfterRead: boolean = true,
-    statusFilter?: 'all' | 'errors_only' | '4xx' | '5xx'
+    statusFilter?: 'all' | 'errors_only' | '4xx' | '5xx',
+    includeStaticAssets: boolean = false,
+    limit: number = 25
   ): NetworkLogEntry[] {
     let result = [...this.networkLogs];
+
+    if (!includeStaticAssets) {
+      const staticTypes = new Set(['image', 'font', 'stylesheet', 'media']);
+      result = result.filter(log => !staticTypes.has(log.resourceType));
+    }
+
     if (filter) {
       try {
         const regex = new RegExp(filter, 'i');
@@ -531,6 +574,11 @@ export class BrowserManager {
         result = result.filter(log => (log.status !== undefined && log.status >= 500) || !!log.error);
       }
     }
+
+    if (limit > 0 && result.length > limit) {
+      result = result.slice(result.length - limit);
+    }
+
     if (clearAfterRead) {
       this.networkLogs = [];
     }
@@ -539,7 +587,8 @@ export class BrowserManager {
 
   public getConsoleLogs(
     level: 'all' | 'error' | 'warn' = 'error',
-    clearAfterRead: boolean = true
+    clearAfterRead: boolean = true,
+    limit: number = 50
   ): ConsoleLogEntry[] {
     let result = [...this.consoleLogs];
     if (level === 'error') {
@@ -547,6 +596,11 @@ export class BrowserManager {
     } else if (level === 'warn') {
       result = result.filter(log => log.type === 'error' || log.type === 'warning');
     }
+
+    if (limit > 0 && result.length > limit) {
+      result = result.slice(result.length - limit);
+    }
+
     if (clearAfterRead) {
       this.consoleLogs = [];
     }
@@ -554,14 +608,35 @@ export class BrowserManager {
   }
 
   public async interact(
-    action: 'click' | 'type' | 'fill' | 'hover' | 'scroll' | 'press_key',
+    action: 'click' | 'type' | 'fill' | 'hover' | 'scroll' | 'scrollIntoView' | 'press_key',
     selector?: string,
     text?: string,
     key?: string,
     scrollDelta?: { x: number; y: number },
-    clearFirst: boolean = false
+    clearFirst: boolean = false,
+    waitForNavigation: boolean = false,
+    waitForTimeoutMs: number = 0
   ): Promise<string> {
     const page = await this.ensurePage();
+
+    if (action === 'scrollIntoView') {
+      if (!selector) {
+        throw new Error('Selector is required for action "scrollIntoView".');
+      }
+      const locator = page.locator(selector).first();
+      try {
+        await locator.waitFor({ state: 'attached', timeout: 4000 });
+        await locator.evaluate((el: HTMLElement) => {
+          el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
+        });
+        if (waitForTimeoutMs > 0) {
+          await page.waitForTimeout(waitForTimeoutMs);
+        }
+        return `Scrolled element "${selector}" into view (centered in viewport).`;
+      } catch {
+        throw new Error(`Cannot perform "scrollIntoView": Element "${selector}" not attached to DOM after 4s timeout.`);
+      }
+    }
 
     if (action === 'scroll') {
       const x = scrollDelta?.x ?? 0;
@@ -571,12 +646,18 @@ export class BrowserManager {
         try {
           await locator.waitFor({ state: 'attached', timeout: 4000 });
           await locator.evaluate((el, delta) => el.scrollBy(delta.x, delta.y), { x, y });
+          if (waitForTimeoutMs > 0) {
+            await page.waitForTimeout(waitForTimeoutMs);
+          }
           return `Scrolled element "${selector}" by x=${x}, y=${y}.`;
         } catch {
           throw new Error(`Cannot perform "scroll": Element "${selector}" not attached to DOM after 4s timeout.`);
         }
       }
       await page.evaluate(delta => window.scrollBy(delta.x, delta.y), { x, y });
+      if (waitForTimeoutMs > 0) {
+        await page.waitForTimeout(waitForTimeoutMs);
+      }
       return `Scrolled page by x=${x}, y=${y}.`;
     }
 
@@ -589,12 +670,18 @@ export class BrowserManager {
         try {
           await locator.waitFor({ state: 'visible', timeout: 4000 });
           await locator.press(key);
+          if (waitForTimeoutMs > 0) {
+            await page.waitForTimeout(waitForTimeoutMs);
+          }
           return `Pressed key "${key}" on element "${selector}".`;
         } catch {
           throw new Error(`Cannot perform "press_key": Element "${selector}" not visible after 4s timeout.`);
         }
       }
       await page.keyboard.press(key);
+      if (waitForTimeoutMs > 0) {
+        await page.waitForTimeout(waitForTimeoutMs);
+      }
       return `Pressed key "${key}" on active page.`;
     }
 
@@ -611,16 +698,36 @@ export class BrowserManager {
 
     switch (action) {
       case 'click':
-        await locator.click();
+        if (waitForNavigation) {
+          try {
+            await Promise.all([
+              page.waitForNavigation({ timeout: 6000, waitUntil: 'domcontentloaded' }).catch(() => {}),
+              locator.click()
+            ]);
+          } catch {
+            await locator.click();
+          }
+        } else {
+          await locator.click();
+        }
+        if (waitForTimeoutMs > 0) {
+          await page.waitForTimeout(waitForTimeoutMs);
+        }
         return `Clicked element "${selector}".`;
       case 'hover':
         await locator.hover();
+        if (waitForTimeoutMs > 0) {
+          await page.waitForTimeout(waitForTimeoutMs);
+        }
         return `Hovered element "${selector}".`;
       case 'fill':
         if (text === undefined) {
           throw new Error('Text parameter is required for action "fill".');
         }
         await locator.fill(text);
+        if (waitForTimeoutMs > 0) {
+          await page.waitForTimeout(waitForTimeoutMs);
+        }
         return `Filled element "${selector}" with "${text}".`;
       case 'type':
         if (text === undefined) {
@@ -630,6 +737,9 @@ export class BrowserManager {
           await locator.fill('');
         }
         await locator.pressSequentially(text, { delay: 20 });
+        if (waitForTimeoutMs > 0) {
+          await page.waitForTimeout(waitForTimeoutMs);
+        }
         return `Typed text into element "${selector}".`;
       default:
         throw new Error(`Unsupported action: ${action}`);
@@ -741,6 +851,12 @@ export class BrowserManager {
             if (el.id) {
               return `#${CSS.escape(el.id)}`;
             }
+            const testId = el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy');
+            if (testId) {
+              const attr = el.getAttribute('data-testid') ? 'data-testid' : (el.getAttribute('data-test') ? 'data-test' : 'data-cy');
+              return `[${attr}="${CSS.escape(testId)}"]`;
+            }
+
             const path: string[] = [];
             let curr: Element | null = el;
             while (curr && curr.nodeType === Node.ELEMENT_NODE && curr !== document.body && curr !== document.documentElement) {
@@ -749,14 +865,29 @@ export class BrowserManager {
                 path.unshift(`#${CSS.escape(curr.id)}`);
                 break;
               }
+              const currTestId = curr.getAttribute('data-testid') || curr.getAttribute('data-test');
+              if (currTestId) {
+                const attr = curr.getAttribute('data-testid') ? 'data-testid' : 'data-test';
+                path.unshift(`[${attr}="${CSS.escape(currTestId)}"]`);
+                break;
+              }
               const parent: Element | null = curr.parentElement;
               if (!parent) break;
+
+              let classHint = '';
+              if (curr.className && typeof curr.className === 'string') {
+                const classes = curr.className.trim().split(/\s+/).filter(c => c && !c.includes(':') && !['flex', 'grid', 'hidden', 'block', 'relative', 'absolute'].includes(c));
+                if (classes.length > 0) {
+                  classHint = '.' + CSS.escape(classes[0]);
+                }
+              }
+
               const siblings = Array.from(parent.children).filter(c => c.tagName.toLowerCase() === tag);
               if (siblings.length > 1) {
                 const index = siblings.indexOf(curr) + 1;
-                path.unshift(`${tag}:nth-of-type(${index})`);
+                path.unshift(`${tag}${classHint}:nth-of-type(${index})`);
               } else {
-                path.unshift(tag);
+                path.unshift(`${tag}${classHint}`);
               }
               curr = parent;
             }
@@ -820,29 +951,37 @@ export class BrowserManager {
             let computedStyles: Record<string, string> | undefined;
             if (withStyles) {
               const cs = window.getComputedStyle(target);
-              computedStyles = {
+              const styles: Record<string, string> = {
                 display: cs.display,
-                flexDirection: cs.flexDirection !== 'row' ? cs.flexDirection : undefined,
-                gridTemplateColumns: cs.gridTemplateColumns !== 'none' ? cs.gridTemplateColumns : undefined,
-                gap: cs.gap !== 'normal' ? cs.gap : undefined,
                 width: `${Math.round(rect.width)}px`,
                 height: `${Math.round(rect.height)}px`,
-                padding: cs.padding,
-                margin: cs.margin,
-                backgroundColor: cs.backgroundColor,
-                color: cs.color,
-                fontSize: cs.fontSize,
-                fontWeight: cs.fontWeight,
-                fontFamily: cs.fontFamily,
-                lineHeight: cs.lineHeight,
-                borderRadius: cs.borderRadius !== '0px' ? cs.borderRadius : undefined,
-                border: cs.border !== 'none' && !cs.border.startsWith('0px') ? cs.border : undefined,
-                boxShadow: cs.boxShadow !== 'none' ? cs.boxShadow : undefined
+                color: cs.color
               };
-              // Remove undefined keys
-              Object.keys(computedStyles).forEach(k => {
-                if (computedStyles![k] === undefined) delete computedStyles![k];
-              });
+
+              const addIf = (key: string, val: string, isDefault: (v: string) => boolean) => {
+                if (!isDefault(val)) {
+                  styles[key] = val;
+                }
+              };
+
+              addIf('position', cs.position, v => v === 'static');
+              addIf('zIndex', cs.zIndex, v => v === 'auto');
+              addIf('overflow', cs.overflow, v => v === 'visible');
+              addIf('visibility', cs.visibility, v => v === 'visible');
+              addIf('opacity', cs.opacity, v => v === '1');
+              addIf('pointerEvents', cs.pointerEvents, v => v === 'auto');
+              addIf('cursor', cs.cursor, v => v === 'auto');
+              addIf('flexDirection', cs.flexDirection, v => v === 'row');
+              addIf('gridTemplateColumns', cs.gridTemplateColumns, v => v === 'none');
+              addIf('gap', cs.gap, v => v === 'normal');
+              addIf('padding', cs.padding, v => v === '0px');
+              addIf('margin', cs.margin, v => v === '0px');
+              addIf('backgroundColor', cs.backgroundColor, v => v === 'rgba(0, 0, 0, 0)' || v === 'transparent');
+              addIf('borderRadius', cs.borderRadius, v => v === '0px');
+              addIf('border', cs.border, v => v === 'none' || v.startsWith('0px'));
+              addIf('boxShadow', cs.boxShadow, v => v === 'none');
+
+              computedStyles = styles;
             }
 
             cleanup();
@@ -890,13 +1029,14 @@ export class BrowserManager {
       status: 'selected',
       selector: rawResult.selector,
       tagName: rawResult.tagName,
+      frameworkComponent: rawResult.frameworkComponent,
       rect: rawResult.rect,
       computedStyles: rawResult.computedStyles
     };
 
     // Extract token-lean semantic DOM tree for the picked element
     try {
-      result.domTree = await extractCompressedDom(page, { selector: rawResult.selector });
+      result.domTree = await extractCompressedDom(page, { selector: rawResult.selector, includeOffscreen: true });
     } catch {
       // Fallback if compressor cannot slice selector
     }
@@ -943,6 +1083,7 @@ export class BrowserManager {
           status: 'selected',
           selector: data.selector,
           tagName: data.tagName,
+          frameworkComponent: data.frameworkComponent,
           rect: data.rect,
           computedStyles: data.computedStyles,
           timestamp: new Date().toISOString()
@@ -950,7 +1091,7 @@ export class BrowserManager {
 
         // Extract token-lean semantic DOM tree for the picked element
         try {
-          picked.domTree = await extractCompressedDom(page, { selector: data.selector });
+          picked.domTree = await extractCompressedDom(page, { selector: data.selector, includeOffscreen: true });
         } catch {
           // Ignore
         }
@@ -974,6 +1115,8 @@ export class BrowserManager {
       (() => {
         if (window.__spector_hotkey_registered) return;
         window.__spector_hotkey_registered = true;
+
+        ${IN_BROWSER_COMPONENT_DETECTOR_FN}
 
         window.addEventListener('keydown', (e) => {
           if (e.altKey && (e.key === 'p' || e.key === 'P')) {
@@ -1007,6 +1150,9 @@ export class BrowserManager {
 
             function getCssSelector(el) {
               if (el.id) return '#' + CSS.escape(el.id);
+              const testId = el.getAttribute('data-testid') || el.getAttribute('data-test') || el.getAttribute('data-cy');
+              if (testId) return '[' + (el.getAttribute('data-testid') ? 'data-testid' : (el.getAttribute('data-test') ? 'data-test' : 'data-cy')) + '="' + CSS.escape(testId) + '"]';
+
               const path = [];
               let curr = el;
               while (curr && curr.nodeType === Node.ELEMENT_NODE && curr !== document.body && curr !== document.documentElement) {
@@ -1015,14 +1161,28 @@ export class BrowserManager {
                   path.unshift('#' + CSS.escape(curr.id));
                   break;
                 }
+                const currTestId = curr.getAttribute('data-testid') || curr.getAttribute('data-test');
+                if (currTestId) {
+                  path.unshift('[' + (curr.getAttribute('data-testid') ? 'data-testid' : 'data-test') + '="' + CSS.escape(currTestId) + '"]');
+                  break;
+                }
                 const parent = curr.parentElement;
                 if (!parent) break;
+
+                let classHint = '';
+                if (curr.className && typeof curr.className === 'string') {
+                  const classes = curr.className.trim().split(/\\s+/).filter(c => c && !c.includes(':') && !['flex', 'grid', 'hidden', 'block', 'relative', 'absolute'].includes(c));
+                  if (classes.length > 0) {
+                    classHint = '.' + CSS.escape(classes[0]);
+                  }
+                }
+
                 const siblings = Array.from(parent.children).filter(c => c.tagName.toLowerCase() === tag);
                 if (siblings.length > 1) {
                   const index = siblings.indexOf(curr) + 1;
-                  path.unshift(tag + ':nth-of-type(' + index + ')');
+                  path.unshift(tag + classHint + ':nth-of-type(' + index + ')');
                 } else {
-                  path.unshift(tag);
+                  path.unshift(tag + classHint);
                 }
                 curr = parent;
               }
@@ -1085,22 +1245,26 @@ export class BrowserManager {
               const selector = getCssSelector(target);
               const tagName = target.tagName.toLowerCase();
               const cs = window.getComputedStyle(target);
+              const frameworkComponent = typeof detectFrameworkComponent === 'function' ? detectFrameworkComponent(target) : null;
 
               const computedStyles = {
                 display: cs.display,
+                position: cs.position !== 'static' ? cs.position : undefined,
+                zIndex: cs.zIndex !== 'auto' ? cs.zIndex : undefined,
+                overflow: cs.overflow !== 'visible' ? cs.overflow : undefined,
+                visibility: cs.visibility !== 'visible' ? cs.visibility : undefined,
+                opacity: cs.opacity !== '1' ? cs.opacity : undefined,
+                pointerEvents: cs.pointerEvents !== 'auto' ? cs.pointerEvents : undefined,
+                cursor: cs.cursor !== 'auto' ? cs.cursor : undefined,
                 flexDirection: cs.flexDirection !== 'row' ? cs.flexDirection : undefined,
                 gridTemplateColumns: cs.gridTemplateColumns !== 'none' ? cs.gridTemplateColumns : undefined,
                 gap: cs.gap !== 'normal' ? cs.gap : undefined,
                 width: Math.round(rect.width) + 'px',
                 height: Math.round(rect.height) + 'px',
-                padding: cs.padding,
-                margin: cs.margin,
-                backgroundColor: cs.backgroundColor,
+                padding: cs.padding !== '0px' ? cs.padding : undefined,
+                margin: cs.margin !== '0px' ? cs.margin : undefined,
+                backgroundColor: cs.backgroundColor !== 'rgba(0, 0, 0, 0)' && cs.backgroundColor !== 'transparent' ? cs.backgroundColor : undefined,
                 color: cs.color,
-                fontSize: cs.fontSize,
-                fontWeight: cs.fontWeight,
-                fontFamily: cs.fontFamily,
-                lineHeight: cs.lineHeight,
                 borderRadius: cs.borderRadius !== '0px' ? cs.borderRadius : undefined,
                 border: cs.border !== 'none' && !cs.border.startsWith('0px') ? cs.border : undefined,
                 boxShadow: cs.boxShadow !== 'none' ? cs.boxShadow : undefined
@@ -1116,6 +1280,7 @@ export class BrowserManager {
                 window.__spector_on_element_picked({
                   selector,
                   tagName,
+                  frameworkComponent,
                   rect: {
                     x: Math.round(rect.x),
                     y: Math.round(rect.y),

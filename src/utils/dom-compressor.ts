@@ -5,13 +5,14 @@ export interface DomTreeOptions {
   selector?: string;
   includeBoundingBox?: boolean;
   maxDepth?: number;
+  includeOffscreen?: boolean;
 }
 
 export async function extractCompressedDom(page: Page, options: DomTreeOptions = {}): Promise<string> {
-  const { selector, includeBoundingBox = true, maxDepth = 8 } = options;
+  const { selector, includeBoundingBox = true, maxDepth = 8, includeOffscreen = false } = options;
 
   return await page.evaluate(
-    ({ rootSelector, withBoxes, depthLimit, detectorScript }) => {
+    ({ rootSelector, withBoxes, depthLimit, withOffscreen, detectorScript }) => {
       const detectFn = new Function(`${detectorScript}; return detectFrameworkComponent;`)();
       const root = rootSelector ? document.querySelector(rootSelector) : document.body;
       if (!root) {
@@ -32,12 +33,28 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
       function isVisible(el: Element): boolean {
         if (!(el instanceof HTMLElement || el instanceof SVGElement)) return false;
         const style = window.getComputedStyle(el);
-        if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+        if (style.display === 'none' || style.visibility === 'hidden') {
           return false;
         }
+
+        const hasAnim =
+          el.hasAttribute('data-aos') ||
+          el.hasAttribute('data-animate') ||
+          el.hasAttribute('data-sal') ||
+          el.hasAttribute('data-wow') ||
+          (typeof el.className === 'string' && /\b(fade|aos|animate|transition|slide)\b/i.test(el.className));
+
+        if (style.opacity === '0' && !hasAnim && !withOffscreen) {
+          return false;
+        }
+
         const rect = el.getBoundingClientRect();
-        // Element is visible if it has some area or has visible children
-        return rect.width > 0 && rect.height > 0;
+        if (withOffscreen) {
+          return rect.width > 0 || rect.height > 0 || el.children.length > 0;
+        }
+
+        // Element is visible if it has layout area, or has children waiting for animation
+        return (rect.width > 0 && rect.height > 0) || (hasAnim && el.children.length > 0);
       }
 
       function getDirectText(el: Element): string {
@@ -81,6 +98,9 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
               .map(c => `.${c}`)
               .join('')
           : '';
+
+        const comp = typeof detectFn === 'function' ? detectFn(el) : null;
+        const compHint = comp && comp.componentName ? ` [${comp.framework}:${comp.componentName}]` : '';
 
         const rect = el.getBoundingClientRect();
         const boxStr = withBoxes
@@ -136,21 +156,43 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
           }
         }
 
-        const comp = detectFn(el);
-        const compHint = comp?.componentName ? ` [comp=<${comp.componentName}>]` : '';
+        const cs = window.getComputedStyle(el);
+        let statusHint = '';
+        if (cs.opacity === '0') {
+          statusHint += ' [anim/opacity=0]';
+        }
+        if (rect.width > 0 && rect.height > 0 && (rect.right < 0 || rect.left > window.innerWidth || rect.bottom < 0 || rect.top > window.innerHeight)) {
+          statusHint += ' [offscreen]';
+        }
 
-        lines.push(`${indent}- <${tag}${id}${className ? ' ' + className : ''}${compHint}${roleStr}${extraDetails}${locHint}>${textSnippet}${boxStr}`);
+        lines.push(`${indent}- <${tag}${id}${className ? ' ' + className : ''}${compHint}${roleStr}${extraDetails}${statusHint}${locHint}>${textSnippet}${boxStr}`);
 
         for (const child of children) {
           lines.push(...formatNode(child, currentDepth + 1));
+        }
+
+        // Support open Shadow DOM traversal for Web Components (Lit, Shoelace, Ionic)
+        if ((el as any).shadowRoot) {
+          const shadowChildren = Array.from((el as any).shadowRoot.children) as Element[];
+          if (shadowChildren.length > 0) {
+            lines.push(`${indent}  - <#shadow-root>`);
+            for (const sChild of shadowChildren) {
+              lines.push(...formatNode(sChild, currentDepth + 2));
+            }
+          }
         }
 
         return lines;
       }
 
       const result = formatNode(root, 0);
-      return result.length > 0 ? result.join('\n') : 'No visible rendered elements found.';
+      if (result.length > 0) return result.join('\n');
+      if (rootSelector) {
+        const cs = window.getComputedStyle(root);
+        return `Element "${rootSelector}" found (<${root.tagName.toLowerCase()}>) but has no visible rendered children (display: ${cs.display}, visibility: ${cs.visibility}, opacity: ${cs.opacity}). Set includeOffscreen: true to inspect offscreen or animating elements.`;
+      }
+      return 'No visible rendered elements found.';
     },
-    { rootSelector: selector, withBoxes: includeBoundingBox, depthLimit: maxDepth, detectorScript: IN_BROWSER_COMPONENT_DETECTOR_FN }
+    { rootSelector: selector, withBoxes: includeBoundingBox, depthLimit: maxDepth, withOffscreen: includeOffscreen, detectorScript: IN_BROWSER_COMPONENT_DETECTOR_FN }
   );
 }

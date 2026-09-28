@@ -3,6 +3,7 @@ export interface ConsoleLogEntry {
   text: string;
   timestamp: string;
   location?: string;
+  count?: number;
 }
 
 export interface NetworkLogEntry {
@@ -57,7 +58,7 @@ export interface TabInfo {
 }
 
 export interface FrameworkComponentInfo {
-  framework: 'vue' | 'react' | 'svelte' | 'angular' | 'unknown';
+  framework: 'vue' | 'react' | 'svelte' | 'angular' | 'livewire' | 'alpine' | 'inertia' | 'blade' | 'unknown';
   componentName?: string;
   sourceFile?: string;
   sourceLine?: number;
@@ -88,4 +89,29 @@ export interface PickedElementInfo {
   frameworkComponent?: FrameworkComponentInfo;
   timestamp?: string;
 }
+
+export type McpToolContent =
+  | { type: 'text'; text: string }
+  | { type: 'image'; data: string; mimeType: string };
+
+export interface McpToolResponse {
+  [x: string]: unknown;
+  content: McpToolContent[];
+  isError?: boolean;
+}
+
+export function textResponse(text: string, isError = false): McpToolResponse {
+  return {
+    content: [{ type: 'text', text }],
+    ...(isError ? { isError: true } : {})
+  };
+}
+
+export function jsonResponse(data: unknown, isError = false): McpToolResponse {
+  return {
+    content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
+    ...(isError ? { isError: true } : {})
+  };
+}
+
 

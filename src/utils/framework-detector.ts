@@ -4,7 +4,7 @@
  */
 
 export interface DetectedFrameworkComponent {
-  framework: 'vue' | 'react' | 'svelte' | 'angular' | 'unknown';
+  framework: 'vue' | 'react' | 'svelte' | 'angular' | 'livewire' | 'alpine' | 'inertia' | 'blade' | 'unknown';
   componentName?: string;
   sourceFile?: string;
   sourceLine?: number;
@@ -70,6 +70,97 @@ function detectFrameworkComponent(el) {
         }
         fiber = fiber.return;
       }
+    }
+
+    // 4. Svelte detection (__svelte_meta)
+    if (curr.__svelte_meta) {
+      const meta = curr.__svelte_meta;
+      const file = meta.loc?.file;
+      const name = file ? file.split(/[\\\\/]/).pop().replace(/\\.\\w+$/, '') : undefined;
+      return {
+        framework: 'svelte',
+        componentName: name,
+        sourceFile: file,
+        sourceLine: meta.loc?.line
+      };
+    }
+
+    // 5. Livewire detection (wire:id / wire:snapshot / wire:initial-data)
+    if (curr.hasAttribute('wire:id') || curr.hasAttribute('wire:snapshot') || curr.hasAttribute('wire:initial-data')) {
+      let compName = undefined;
+      const snapshot = curr.getAttribute('wire:snapshot');
+      if (snapshot) {
+        try {
+          const parsed = JSON.parse(snapshot);
+          compName = parsed.memo?.name;
+        } catch {
+          // Ignore
+        }
+      }
+      if (!compName) {
+        const initData = curr.getAttribute('wire:initial-data');
+        if (initData) {
+          try {
+            const parsed = JSON.parse(initData);
+            compName = parsed.fingerprint?.name;
+          } catch {
+            // Ignore
+          }
+        }
+      }
+      return {
+        framework: 'livewire',
+        componentName: compName || curr.getAttribute('wire:id') || 'LivewireComponent'
+      };
+    }
+
+    // 6. Inertia.js detection ([data-page])
+    const inertiaPageEl = curr.hasAttribute('data-page') ? curr : (curr.id === 'app' && curr.hasAttribute('data-page') ? curr : null);
+    if (inertiaPageEl) {
+      try {
+        const dataPage = JSON.parse(inertiaPageEl.getAttribute('data-page') || '{}');
+        if (dataPage.component) {
+          return {
+            framework: 'inertia',
+            componentName: dataPage.component,
+            sourceFile: 'resources/js/Pages/' + dataPage.component + '.vue'
+          };
+        }
+      } catch {
+        // Ignore
+      }
+    }
+
+    // 7. Alpine.js detection (x-data)
+    if (curr.hasAttribute('x-data')) {
+      const xDataVal = curr.getAttribute('x-data')?.trim();
+      const compName = xDataVal && xDataVal.length <= 40 ? xDataVal : 'AlpineComponent';
+      return {
+        framework: 'alpine',
+        componentName: compName
+      };
+    }
+
+    // 8. Blade Comment / HTML Comment Sniffer (View: / @feature / resources/views)
+    let sib = curr.previousSibling;
+    let commentChecks = 0;
+    while (sib && commentChecks < 5) {
+      if (sib.nodeType === Node.COMMENT_NODE && sib.textContent) {
+        const text = sib.textContent.trim();
+        const match = text.match(/(?:View|Blade|Component|File|Template):\\s*([^\\s->]+)/i) ||
+                      text.match(/@feature\\s+([^\\s->]+)/i) ||
+                      text.match(/resources\\/views\\/[^\\s->]+/i);
+        if (match) {
+          const resolved = match[1] || match[0];
+          return {
+            framework: 'blade',
+            componentName: resolved.split(/[\\\\/]/).pop().replace(/\\.blade\\.php$/, ''),
+            sourceFile: resolved
+          };
+        }
+      }
+      sib = sib.previousSibling;
+      commentChecks++;
     }
 
     curr = curr.parentElement;

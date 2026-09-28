@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
+import { jsonResponse } from '../types.js';
 
 export function registerAttachTool(server: McpServer): void {
   const attachSchema = {
@@ -26,25 +27,14 @@ export function registerAttachTool(server: McpServer): void {
       autoLaunch ?? true
     );
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              status: 'connected',
-              activeTab: {
-                title: result.title,
-                url: result.url,
-                viewport: result.viewport
-              }
-            },
-            null,
-            2
-          )
-        }
-      ]
-    };
+    return jsonResponse({
+      status: 'connected',
+      activeTab: {
+        title: result.title,
+        url: result.url,
+        viewport: result.viewport
+      }
+    });
   };
 
   server.tool(

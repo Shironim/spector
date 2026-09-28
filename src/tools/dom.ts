@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
+import { textResponse } from '../types.js';
 
 export function registerDomTool(server: McpServer): void {
   const domSchema = {
@@ -11,26 +12,23 @@ export function registerDomTool(server: McpServer): void {
     includeBoundingBox: z
       .boolean()
       .optional()
-      .describe('Sertakan data koordinat piksel [box=x,y,w,h] (default: true)')
+      .describe('Sertakan data koordinat piksel [box=x,y,w,h] (default: true)'),
+    includeOffscreen: z
+      .boolean()
+      .optional()
+      .describe('Sertakan elemen di luar viewport (slider, carousel, horizontal scroll, accordion) atau elemen dengan animasi AOS/fade-in (default: false)')
   };
 
-  const domHandler = async ({ selector, includeBoundingBox }: any) => {
+  const domHandler = async ({ selector, includeBoundingBox, includeOffscreen }: any) => {
     const manager = BrowserManager.getInstance();
-    const domTree = await manager.getDomTree(selector, includeBoundingBox ?? true);
+    const domTree = await manager.getDomTree(selector, includeBoundingBox ?? true, includeOffscreen ?? false);
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: domTree
-        }
-      ]
-    };
+    return textResponse(domTree);
   };
 
   server.tool(
     'spector_get_dom_tree',
-    '[READ-ONLY MAP & TOKEN-LEAN DOM] Mengambil struktur semantik DOM yang dioptimalkan untuk LLM (token-lean) dalam bentuk pohon semantik ringkas, dilengkapi koordinat bounding box [box=x,y,w,h]. Menghemat token hingga 95% dibanding raw HTML. Gunakan saat ingin memahami tata letak dan hierarki UI.',
+    '[READ-ONLY MAP & TOKEN-LEAN DOM] Mengambil struktur semantik DOM yang dioptimalkan untuk LLM (token-lean). Gunakan saat ingin memahami tata letak awal atau hierarki UI makro. CATATAN: Untuk memverifikasi dampak aksi klik/input/mutasi kode, utamakan spector_diff_dom atau spector_pick_element alih-alih me-dump seluruh DOM ulang untuk mencegah context rot.',
     domSchema,
     domHandler
   );

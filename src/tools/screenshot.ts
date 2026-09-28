@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
+import type { McpToolContent } from '../types.js';
 
 export function registerScreenshotTool(server: McpServer): void {
   const screenshotSchema = {
@@ -19,18 +20,20 @@ export function registerScreenshotTool(server: McpServer): void {
     const buffer = await manager.captureScreenshot(selector, fullPage ?? false);
     const base64Data = buffer.toString('base64');
 
+    const contentBlocks: McpToolContent[] = [
+      {
+        type: 'image',
+        data: base64Data,
+        mimeType: 'image/png'
+      },
+      {
+        type: 'text',
+        text: `Screenshot captured successfully${selector ? ` for selector "${selector}"` : ''} (${Math.round(buffer.length / 1024)} KB).`
+      }
+    ];
+
     return {
-      content: [
-        {
-          type: 'image',
-          data: base64Data,
-          mimeType: 'image/png'
-        },
-        {
-          type: 'text',
-          text: `Screenshot captured successfully${selector ? ` for selector "${selector}"` : ''} (${Math.round(buffer.length / 1024)} KB).`
-        }
-      ]
+      content: contentBlocks
     };
   };
 

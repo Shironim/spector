@@ -1,20 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
+import { jsonResponse } from '../types.js';
 
 export function registerTabsTools(server: McpServer): void {
   const listTabsHandler = async () => {
     const manager = BrowserManager.getInstance();
     const tabs = await manager.listTabs();
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(tabs, null, 2)
-        }
-      ]
-    };
+    return jsonResponse(tabs);
   };
 
   const selectTabSchema = {
@@ -44,25 +38,14 @@ export function registerTabsTools(server: McpServer): void {
     const manager = BrowserManager.getInstance();
     const result = await manager.selectTab({ index, url, urlPattern, title, debugSessionId });
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              status: 'tab_selected',
-              activeTab: {
-                title: result.title,
-                url: result.url,
-                viewport: result.viewport
-              }
-            },
-            null,
-            2
-          )
-        }
-      ]
-    };
+    return jsonResponse({
+      status: 'tab_selected',
+      activeTab: {
+        title: result.title,
+        url: result.url,
+        viewport: result.viewport
+      }
+    });
   };
 
   // Primary Spector tools

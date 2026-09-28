@@ -29,13 +29,13 @@ async function main() {
   }
 
   if (args.includes('--version') || args.includes('-v')) {
-    console.log('1.0.0');
+    console.log('1.0.1');
     process.exit(0);
   }
 
   const server = new McpServer({
     name: 'spector',
-    version: '1.0.0'
+    version: '1.0.1'
   });
 
   // Register all modular tools

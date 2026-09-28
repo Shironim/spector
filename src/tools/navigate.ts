@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
+import { jsonResponse } from '../types.js';
 
 export function registerNavigateTool(server: McpServer): void {
   const navigateSchema = {
@@ -17,22 +18,11 @@ export function registerNavigateTool(server: McpServer): void {
     const manager = BrowserManager.getInstance();
     const result = await manager.navigate(url, waitUntil ?? 'load');
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              status: 'navigated',
-              url: result.url,
-              title: result.title
-            },
-            null,
-            2
-          )
-        }
-      ]
-    };
+    return jsonResponse({
+      status: 'navigated',
+      url: result.url,
+      title: result.title
+    });
   };
 
   server.tool(

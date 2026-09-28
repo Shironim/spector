@@ -1,6 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
+import { jsonResponse } from '../types.js';
 
 export function registerDiffTool(server: McpServer): void {
   const diffSchema = {
@@ -26,26 +27,15 @@ export function registerDiffTool(server: McpServer): void {
       message = `Komparasi DOM: +${addedCount} elemen baru, -${removedCount} elemen dihapus, ~${mutatedCount} elemen termutasi (${textChangesCount} perubahan teks).`;
     }
 
-    return {
-      content: [
-        {
-          type: 'text',
-          text: JSON.stringify(
-            {
-              summaryMessage: message,
-              ...result
-            },
-            null,
-            2
-          )
-        }
-      ]
-    };
+    return jsonResponse({
+      summaryMessage: message,
+      ...result
+    });
   };
 
   server.tool(
     'spector_diff_dom',
-    '[SEMANTIC UI VERIFICATION & TOKEN SAVER] Membandingkan snapshot DOM saat ini dengan baseline sebelum perubahan (atau merekam baseline baru). Mengembalikan delta mutasi (elemen baru, terhapus, perubahan teks, dan pergeseran bounding box) untuk memverifikasi perbaikan UI secara instan dan sangat hemat token.',
+    '[SEMANTIC UI VERIFICATION & TOKEN SAVER] (REKOMENDASI UTAMA SETELAH AKSI) Membandingkan snapshot DOM saat ini dengan baseline sebelum perubahan (atau merekam baseline baru). Mengembalikan delta mutasi (elemen baru, terhapus, perubahan teks, dan pergeseran bounding box). Gunakan setelah klik/ketik/submit untuk membuktikan perubahan visual secara instan dengan konsumsi token terendah.',
     diffSchema,
     diffHandler
   );
