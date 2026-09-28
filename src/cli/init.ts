@@ -114,6 +114,17 @@ Gunakan sebelum dan sesudah mengedit kode UI untuk verifikasi instan tanpa menar
    spector_diff_dom()
    // Mengembalikan: elemen bertambah, terhapus, perubahan teks, dan pergeseran koordinat box
    \`\`\`
+
+---
+
+## 3. Playbook Guardrails & Anti-Patterns
+
+| Anti-Pattern | Mengapa Dilarang? | Tindakan yang Benar |
+| :--- | :--- | :--- |
+| **Menebak Selector CSS** | Menghasilkan kode rapuh yang salah target. | Selalu ambil selector riil dari \`spector_get_last_picked\` atau \`spector_get_dom_tree\`. |
+| **Dump Raw HTML** | Membuang puluhan ribu token konteks LLM. | Gunakan \`spector_get_dom_tree\` dengan opsi \`selector\` spesifik. |
+| **Memaksa Re-Login** | Mengganggu flow developer. | Manfaatkan sesi Chrome aktif yang sudah terikat melalui CDP. |
+| **Mengabaikan Error Response** | Menebak-nebak penyebab form gagal. | Selalu baca payload error via \`spector_get_network_logs(statusFilter: "errors_only")\`. |
 `;
 
 export function handleInitCommand(): void {
