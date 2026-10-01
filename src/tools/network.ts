@@ -81,8 +81,6 @@ export function registerNetworkTool(server: McpServer): void {
     networkHandler
   );
 
-  server.tool('browser_get_network_logs', '[Alias for spector_get_network_logs]', networkSchema, networkHandler);
-
   const mockSchema = {
     action: z
       .enum(['set', 'clear', 'list'])
@@ -154,6 +152,4 @@ export function registerNetworkTool(server: McpServer): void {
     mockSchema,
     mockHandler
   );
-
-  server.tool('browser_mock_network', '[Alias for spector_mock_network]', mockSchema, mockHandler);
 }

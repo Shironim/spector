@@ -47,6 +47,4 @@ export function registerAttachTool(server: McpServer): void {
     attachSchema,
     attachHandler
   );
-
-  server.tool('browser_attach', '[Alias for spector_attach]', attachSchema, attachHandler);
 }

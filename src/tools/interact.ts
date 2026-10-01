@@ -82,6 +82,4 @@ export function registerInteractTool(server: McpServer): void {
     interactSchema,
     interactHandler
   );
-
-  server.tool('browser_interact', '[Alias for spector_interact]', interactSchema, interactHandler);
 }

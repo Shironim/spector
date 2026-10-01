@@ -79,20 +79,21 @@ Add Spector to your MCP client configuration (`claude_desktop_config.json`, `.cu
 
 ## Tools Reference
 
-| Primary Tool | Alias | Key Parameters | Action / Output |
-| :--- | :--- | :--- | :--- |
-| `spector_get_last_picked` | `browser_get_last_picked` | `clearAfterRead?` | Retrieves element captured via `Alt + P` (selector, component, physical source path, styles, screenshot). |
-| `spector_pick_element` | `browser_pick_element` | `timeoutMs?`, `includeScreenshot?`, `includeStyles?` | Proactively triggers in-browser inspector banner, awaits click, and resolves component source. |
-| `spector_diff_dom` | `browser_diff_dom` | `selector?`, `resetBaseline?` | Verifies post-action UI changes by returning delta mutations against baseline. |
-| `spector_get_dom_tree` | `browser_get_dom_tree` | `selector?`, `includeBoundingBox?`, `includeOffscreen?` | Returns token-lean compressed accessibility tree with bounding boxes. |
-| `spector_get_network_logs` | `browser_get_network_logs` | `filter?`, `statusFilter?`, `format?`, `limit?`, `includeStaticAssets?` | Returns telemetry of dynamic requests (compact 1-line by default; static assets dropped; credentials scrubbed). |
-| `spector_get_console_logs` | `browser_get_console_logs` | `level?`, `format?`, `limit?`, `clearAfterRead?` | Returns console errors and exceptions with run-length deduplication. |
-| `spector_list_tabs` | `browser_list_tabs` | — | Lists open tabs with indices, titles, URLs, and active status. |
-| `spector_select_tab` | `browser_select_tab` | `index?`, `url?`, `urlPattern?`, `title?`, `debugSessionId?` | Switches active tab via index, URL substring, regex pattern, or session ID. |
-| `spector_interact` | `browser_interact` | `action`, `selector?`, `text?`, `key?`, `scrollDelta?`, `scrollX?`, `scrollY?`, `waitForTimeoutMs?` | Dispatches `click`, `fill`, `type`, `hover`, `scroll`, `scrollIntoView`, or `press_key`. |
-| `spector_navigate` | `browser_navigate` | `url`, `waitUntil?` | Navigates active tab or reloads current page. |
-| `spector_capture_screenshot` | `browser_capture_screenshot` | `fullPage?`, `selector?` | Captures viewport or element screenshot (PNG Base64). |
-| `spector_attach` | `browser_attach` | `cdpUrl?`, `autoLaunch?` | Attaches to physical Chrome CDP instance on port 9222. |
+| Tool | Key Parameters | Action / Output |
+| :--- | :--- | :--- |
+| `spector_get_last_picked` | `clearAfterRead?` | Retrieves element captured via `Alt + P` (selector, component, physical source path, styles, screenshot). |
+| `spector_pick_element` | `timeoutMs?`, `includeScreenshot?`, `includeStyles?` | Proactively triggers in-browser inspector banner, awaits click, and resolves component source. |
+| `spector_diff_dom` | `selector?`, `resetBaseline?` | Verifies post-action UI changes by returning delta mutations against baseline. |
+| `spector_get_dom_tree` | `selector?`, `includeBoundingBox?`, `includeOffscreen?` | Returns token-lean compressed accessibility tree with bounding boxes. |
+| `spector_get_network_logs` | `filter?`, `statusFilter?`, `format?`, `limit?`, `includeStaticAssets?` | Returns telemetry of dynamic requests (compact 1-line by default; static assets dropped; credentials scrubbed). |
+| `spector_mock_network` | `action`, `urlPattern?`, `status?`, `body?`, `contentType?`, `delayMs?` | Ephemeral route mocking and network latency/status simulation. |
+| `spector_get_console_logs` | `level?`, `format?`, `limit?`, `clearAfterRead?` | Returns console errors and exceptions with run-length deduplication. |
+| `spector_list_tabs` | — | Lists open tabs with indices, titles, URLs, and active status. |
+| `spector_select_tab` | `index?`, `url?`, `urlPattern?`, `title?`, `debugSessionId?` | Switches active tab via index, URL substring, regex pattern, or session ID. |
+| `spector_interact` | `action`, `selector?`, `text?`, `key?`, `scrollDelta?`, `scrollX?`, `scrollY?`, `waitForTimeoutMs?` | Dispatches `click`, `fill`, `type`, `hover`, `scroll`, `scrollIntoView`, or `press_key`. |
+| `spector_navigate` | `url`, `waitUntil?` | Navigates active tab or reloads current page. |
+| `spector_capture_screenshot` | `fullPage?`, `selector?` | Captures viewport or element screenshot (PNG Base64). |
+| `spector_attach` | `cdpUrl?`, `autoLaunch?` | Attaches to physical Chrome CDP instance on port 9222. |
 
 ---
 

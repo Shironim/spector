@@ -36,6 +36,4 @@ export function registerDomTool(server: McpServer): void {
     domSchema,
     domHandler
   );
-
-  server.tool('browser_get_dom_tree', '[Alias for spector_get_dom_tree]', domSchema, domHandler);
 }

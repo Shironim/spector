@@ -47,6 +47,4 @@ export function registerScreenshotTool(server: McpServer): void {
     screenshotSchema,
     screenshotHandler
   );
-
-  server.tool('browser_capture_screenshot', '[Alias for spector_capture_screenshot]', screenshotSchema, screenshotHandler);
 }

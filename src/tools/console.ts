@@ -59,6 +59,4 @@ export function registerConsoleTool(server: McpServer): void {
     consoleSchema,
     consoleHandler
   );
-
-  server.tool('browser_get_console_logs', '[Alias for spector_get_console_logs]', consoleSchema, consoleHandler);
 }

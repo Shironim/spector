@@ -43,6 +43,4 @@ export function registerDiffTool(server: McpServer): void {
     diffSchema,
     diffHandler
   );
-
-  server.tool('browser_diff_dom', '[Alias for spector_diff_dom]', diffSchema, diffHandler);
 }

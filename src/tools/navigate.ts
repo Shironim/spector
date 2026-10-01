@@ -35,6 +35,4 @@ export function registerNavigateTool(server: McpServer): void {
     navigateSchema,
     navigateHandler
   );
-
-  server.tool('browser_navigate', '[Alias for spector_navigate]', navigateSchema, navigateHandler);
 }

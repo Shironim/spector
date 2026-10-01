@@ -142,7 +142,4 @@ export function registerPickerTool(server: McpServer): void {
     pickElementHandler
   );
 
-  // Backward-compatibility aliases
-  server.tool('browser_get_last_picked', '[Alias for spector_get_last_picked]', getLastPickedSchema, getLastPickedHandler);
-  server.tool('browser_pick_element', '[Alias for spector_pick_element]', pickElementSchema, pickElementHandler);
 }

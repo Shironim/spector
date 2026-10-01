@@ -70,7 +70,4 @@ export function registerTabsTools(server: McpServer): void {
     selectTabHandler
   );
 
-  // Backward-compatibility aliases
-  server.tool('browser_list_tabs', '[Alias for spector_list_tabs]', {}, listTabsHandler);
-  server.tool('browser_select_tab', '[Alias for spector_select_tab]', selectTabSchema, selectTabHandler);
 }
