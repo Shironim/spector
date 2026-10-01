@@ -8,8 +8,8 @@
     "access": "public"
   },
   "bin": {
-    "spector": "./dist/index.js",
-    "spector-mcp": "./dist/index.js"
+    "spector": "dist/index.js",
+    "spector-mcp": "dist/index.js"
   },
   "files": [
     "dist",
