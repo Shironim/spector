@@ -57,12 +57,33 @@ export interface TabInfo {
   isActive: boolean;
 }
 
+export interface SourceLocation {
+  resolvedFile?: string;
+  absolutePath?: string;
+  fileUrl?: string; // Clickable markdown link format: file:///...#L12
+  line?: number;
+  verifiedOnDisk: boolean;
+  snippet?: string;
+}
+
 export interface FrameworkComponentInfo {
   framework: 'vue' | 'react' | 'svelte' | 'angular' | 'livewire' | 'alpine' | 'inertia' | 'blade' | 'unknown';
   componentName?: string;
   sourceFile?: string;
   sourceLine?: number;
   props?: string[];
+  sourceLocation?: SourceLocation;
+}
+
+export interface MockRouteRule {
+  id: string;
+  urlPattern: string;
+  status: number;
+  contentType?: string;
+  body?: string;
+  headers?: Record<string, string>;
+  delayMs?: number;
+  createdAt?: string;
 }
 
 export interface TabSelectCriteria {

@@ -2,11 +2,13 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { chromium, type Browser, type BrowserContext, type Page, type Request } from 'playwright-core';
-import type { ActiveTabInfo, ConsoleLogEntry, NetworkLogEntry, TabInfo, PickedElementInfo, TabSelectCriteria } from './types.js';
+import { chromium, type Browser, type BrowserContext, type Page, type Request, type Route } from 'playwright-core';
+import type { ActiveTabInfo, ConsoleLogEntry, NetworkLogEntry, TabInfo, PickedElementInfo, TabSelectCriteria, MockRouteRule } from './types.js';
 import { extractCompressedDom } from './utils/dom-compressor.js';
 import { IN_BROWSER_COMPONENT_DETECTOR_FN } from './utils/framework-detector.js';
 import { captureDomSnapshot, compareDomSnapshots, type DomSnapshotData, type DomDiffResult } from './utils/dom-differ.js';
+import { resolveSourceLocation } from './utils/source-resolver.js';
+import { logger } from './utils/logger.js';
 
 function validateCdpEndpoint(endpoint: string): void {
   try {
@@ -70,6 +72,7 @@ export class BrowserManager {
   private networkLogs: NetworkLogEntry[] = [];
   private lastPickedElement: PickedElementInfo | null = null;
   private lastDomSnapshot: DomSnapshotData | null = null;
+  private mockRules = new Map<string, MockRouteRule>();
   private pendingRequests = new Map<
     Request,
     { start: number; method: string; url: string; resourceType: string; postData?: string }
@@ -414,6 +417,9 @@ export class BrowserManager {
         this.page = null;
       }
     });
+
+    // Reapply any active ephemeral mock rules to newly attached page
+    this.applyAllMockRules(page).catch(() => {});
   }
 
   public async getDomTree(
@@ -804,7 +810,7 @@ export class BrowserManager {
           `;
           banner.innerHTML = `
             <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf8;animation:pulse 1.5s infinite;"></span>
-            <span><strong>Live-DOM Inspector:</strong> Arahkan kursor & Klik section/elemen yang ingin diambil (Tekan <strong>Esc</strong> untuk batal)</span>
+            <span><strong>Live-DOM Inspector:</strong> Hover & click any section/element to pick (Press <strong>Esc</strong> to cancel)</span>
           `;
 
           // 2. Create Highlight Box
@@ -1034,11 +1040,23 @@ export class BrowserManager {
       computedStyles: rawResult.computedStyles
     };
 
+    // Enrich with physical source code location (Pick-to-Source)
+    if (result.frameworkComponent) {
+      const loc = resolveSourceLocation(
+        result.frameworkComponent.sourceFile,
+        result.frameworkComponent.componentName,
+        result.frameworkComponent.sourceLine
+      );
+      if (loc) {
+        result.frameworkComponent.sourceLocation = loc;
+      }
+    }
+
     // Extract token-lean semantic DOM tree for the picked element
     try {
       result.domTree = await extractCompressedDom(page, { selector: rawResult.selector, includeOffscreen: true });
-    } catch {
-      // Fallback if compressor cannot slice selector
+    } catch (err: any) {
+      logger.warn('picker_dom_compression_fallback', { selector: rawResult.selector, error: err.message });
     }
 
     // Capture precise screenshot of the picked section
@@ -1047,8 +1065,8 @@ export class BrowserManager {
         const locator = page.locator(rawResult.selector).first();
         const screenshotBuf = await locator.screenshot();
         result.screenshotBase64 = screenshotBuf.toString('base64');
-      } catch {
-        // Ignore screenshot capture failure
+      } catch (err: any) {
+        logger.warn('picker_screenshot_fallback', { selector: rawResult.selector, error: err.message });
       }
     }
 
@@ -1061,6 +1079,101 @@ export class BrowserManager {
       this.lastPickedElement = null;
     }
     return result;
+  }
+
+  public async setNetworkMock(rule: {
+    urlPattern: string;
+    status?: number;
+    contentType?: string;
+    body?: string;
+    headers?: Record<string, string>;
+    delayMs?: number;
+  }): Promise<MockRouteRule> {
+    const page = await this.ensurePage();
+    const id = `mock-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    const mockRule: MockRouteRule = {
+      id,
+      urlPattern: rule.urlPattern,
+      status: rule.status ?? 200,
+      contentType: rule.contentType || (rule.body && rule.body.startsWith('{') ? 'application/json' : 'text/plain'),
+      body: rule.body ?? '',
+      headers: rule.headers || {},
+      delayMs: rule.delayMs ?? 0,
+      createdAt: new Date().toISOString()
+    };
+
+    // Store in active mock registry
+    this.mockRules.set(mockRule.urlPattern, mockRule);
+
+    // Apply route to active Playwright Page
+    await this.applyMockRuleToPage(page, mockRule);
+
+    return mockRule;
+  }
+
+  public async clearNetworkMock(urlPattern?: string): Promise<{ clearedCount: number; remaining: string[] }> {
+    const page = this.page;
+    if (urlPattern) {
+      if (this.mockRules.has(urlPattern)) {
+        this.mockRules.delete(urlPattern);
+        if (page && !page.isClosed()) {
+          try {
+            await page.unroute(urlPattern);
+          } catch {
+            // Ignore unroute failure
+          }
+        }
+        return { clearedCount: 1, remaining: Array.from(this.mockRules.keys()) };
+      }
+      return { clearedCount: 0, remaining: Array.from(this.mockRules.keys()) };
+    } else {
+      const count = this.mockRules.size;
+      for (const pattern of this.mockRules.keys()) {
+        if (page && !page.isClosed()) {
+          try {
+            await page.unroute(pattern);
+          } catch {
+            // Ignore
+          }
+        }
+      }
+      this.mockRules.clear();
+      return { clearedCount: count, remaining: [] };
+    }
+  }
+
+  public listNetworkMocks(): MockRouteRule[] {
+    return Array.from(this.mockRules.values());
+  }
+
+  private async applyMockRuleToPage(page: Page, rule: MockRouteRule): Promise<void> {
+    if (page.isClosed()) return;
+    try {
+      await page.route(rule.urlPattern, async (route: Route) => {
+        if (rule.delayMs && rule.delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, rule.delayMs));
+        }
+        const headers: Record<string, string> = {
+          'content-type': rule.contentType || 'application/json',
+          'access-control-allow-origin': '*',
+          ...rule.headers
+        };
+        await route.fulfill({
+          status: rule.status,
+          headers,
+          body: rule.body
+        });
+      });
+    } catch {
+      // Ignore routing errors if page is transitioning
+    }
+  }
+
+  public async applyAllMockRules(page: Page): Promise<void> {
+    if (page.isClosed()) return;
+    for (const rule of this.mockRules.values()) {
+      await this.applyMockRuleToPage(page, rule);
+    }
   }
 
   private async setupHotkeyPicker(page: Page): Promise<void> {
@@ -1089,11 +1202,23 @@ export class BrowserManager {
           timestamp: new Date().toISOString()
         };
 
+        // Enrich with physical source code location (Pick-to-Source)
+        if (picked.frameworkComponent) {
+          const loc = resolveSourceLocation(
+            picked.frameworkComponent.sourceFile,
+            picked.frameworkComponent.componentName,
+            picked.frameworkComponent.sourceLine
+          );
+          if (loc) {
+            picked.frameworkComponent.sourceLocation = loc;
+          }
+        }
+
         // Extract token-lean semantic DOM tree for the picked element
         try {
           picked.domTree = await extractCompressedDom(page, { selector: data.selector, includeOffscreen: true });
-        } catch {
-          // Ignore
+        } catch (err: any) {
+          logger.warn('hotkey_picker_dom_compression_failed', { selector: data.selector, error: err.message });
         }
 
         // Capture screenshot of the picked section
@@ -1101,11 +1226,17 @@ export class BrowserManager {
           const locator = page.locator(data.selector).first();
           const screenshotBuf = await locator.screenshot();
           picked.screenshotBase64 = screenshotBuf.toString('base64');
-        } catch {
-          // Ignore
+        } catch (err: any) {
+          logger.warn('hotkey_picker_screenshot_failed', { selector: data.selector, error: err.message });
         }
 
         this.lastPickedElement = picked;
+        logger.info('element_picked_via_hotkey', {
+          selector: picked.selector,
+          component: picked.frameworkComponent?.componentName,
+          sourceFile: picked.frameworkComponent?.sourceLocation?.resolvedFile,
+          line: picked.frameworkComponent?.sourceLocation?.line
+        });
       });
     } catch {
       // Function already exposed on this page, ignore
@@ -1130,7 +1261,7 @@ export class BrowserManager {
             const banner = document.createElement('div');
             banner.setAttribute(UI_PREFIX, 'banner');
             banner.style.cssText = 'position:fixed;top:16px;left:50%;transform:translateX(-50%);z-index:2147483647;background:rgba(15,23,42,0.95);color:#ffffff;padding:10px 20px;border-radius:9999px;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:13px;font-weight:500;box-shadow:0 10px 25px -5px rgba(0,0,0,0.3);display:flex;align-items:center;gap:10px;pointer-events:none;user-select:none;backdrop-filter:blur(8px);';
-            banner.innerHTML = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf8;"></span><span><strong>Spector Inspector (Alt+P):</strong> Arahkan & Klik section untuk dikirim ke AI (Esc = Batal)</span>';
+            banner.innerHTML = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#38bdf8;box-shadow:0 0 8px #38bdf8;"></span><span><strong>Spector Inspector (Alt+P):</strong> Hover & click section to send to AI (Esc = Cancel)</span>';
 
             // 2. Create Highlight Box
             const highlightBox = document.createElement('div');
@@ -1289,7 +1420,7 @@ export class BrowserManager {
                   },
                   computedStyles
                 });
-                showToast('✅ Section berhasil disimpan ke Spector AI!');
+                showToast('✅ Element captured and synced to Spector AI!');
               }
             }
 

@@ -2,9 +2,12 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
 import { textResponse, type McpToolContent } from '../types.js';
+import { instrumentHandler } from '../utils/tool-instrument.js';
 
 export function registerPickerTool(server: McpServer): void {
-  const pickElementHandler = async ({ timeoutMs, includeScreenshot, includeStyles }: any) => {
+  const pickElementHandler = instrumentHandler(
+    'spector_pick_element',
+    async ({ timeoutMs, includeScreenshot, includeStyles }: any) => {
     const manager = BrowserManager.getInstance();
     const result = await manager.pickElement(
       timeoutMs ?? 30000,
@@ -13,11 +16,11 @@ export function registerPickerTool(server: McpServer): void {
     );
 
     if (result.status === 'cancelled') {
-      return textResponse('Pemilihan elemen dibatalkan oleh pengguna (Esc ditekan).');
+      return textResponse('Element selection was cancelled by the user (Esc pressed).');
     }
 
     if (result.status === 'timeout') {
-      return textResponse('Waktu pemilihan elemen habis (timeout). Tidak ada elemen yang diklik.');
+      return textResponse('Element selection timed out. No element was clicked.');
     }
 
     const contentBlocks: McpToolContent[] = [
@@ -50,24 +53,26 @@ export function registerPickerTool(server: McpServer): void {
     return {
       content: contentBlocks
     };
-  };
+  });
 
   const pickElementSchema = {
     timeoutMs: z
       .number()
       .optional()
-      .describe('Batas waktu tunggu developer mengklik elemen dalam milidetik (default: 30000 / 30 detik)'),
+      .describe('Timeout in milliseconds waiting for developer to click an element (default: 30000 / 30 seconds)'),
     includeScreenshot: z
       .boolean()
       .optional()
-      .describe('Ambil screenshot spesifik elemen/section yang dipilih secara otomatis (default: true)'),
+      .describe('Automatically capture a cropped screenshot of the selected element/section (default: true)'),
     includeStyles: z
       .boolean()
       .optional()
-      .describe('Ekstrak computed CSS design tokens seperti layout flex/grid, colors, typography, border-radius, spacing (default: true)')
+      .describe('Extract computed CSS design tokens such as flex/grid layout, colors, typography, border-radius, spacing (default: true)')
   };
 
-  const getLastPickedHandler = async ({ clearAfterRead }: any) => {
+  const getLastPickedHandler = instrumentHandler(
+    'spector_get_last_picked',
+    async ({ clearAfterRead }: any) => {
     const manager = BrowserManager.getInstance();
     const result = manager.getLastPickedElement(clearAfterRead ?? false);
 
@@ -76,7 +81,7 @@ export function registerPickerTool(server: McpServer): void {
         content: [
           {
             type: 'text',
-            text: 'Belum ada elemen/section yang dipilih. Anda dapat menekan tombol Alt + P pada tab browser Chrome kapan saja untuk memilih section target dan menyimpannya ke Spector AI.'
+            text: 'No element or section has been picked yet. You can press Alt + P on any active Chrome browser tab at any time to pick a target section and sync it to Spector AI.'
           }
         ]
       };
@@ -113,26 +118,26 @@ export function registerPickerTool(server: McpServer): void {
     return {
       content: contentBlocks
     };
-  };
+  });
 
   const getLastPickedSchema = {
     clearAfterRead: z
       .boolean()
       .optional()
-      .describe('Hapus cache elemen terakhir setelah dibaca (default: false)')
+      .describe('Clear the last picked element cache after reading (default: false)')
   };
 
   // Primary Spector tools
   server.tool(
     'spector_get_last_picked',
-    '[PRIMARY FOR UI FIX & POINT-AND-PROMPT] Mengambil data elemen/section terakhir yang dipilih developer via Alt+P di browser. WAJIB dipanggil pertama kali saat developer meminta perbaikan tampilan (padding, warna, font, layout) atau menyebut "elemen yang barusan saya klik". Mengembalikan CSS selector presisi, computed design tokens, Accessibility DOM tree, dan cropped screenshot.',
+    '[PRIMARY FOR UI FIX & POINT-AND-PROMPT] Retrieves the last element or section picked by the developer via Alt+P in the browser. Call this first whenever the user asks for styling fixes (padding, colors, layout, fonts) or mentions "the element I just clicked". Returns precise CSS selectors, computed design tokens, token-lean accessibility DOM tree, framework component origin (with clickable file links), and cropped screenshot.',
     getLastPickedSchema,
     getLastPickedHandler
   );
 
   server.tool(
     'spector_pick_element',
-    '[PROACTIVE PICK] Mengaktifkan mode visual inspector interaktif di layar browser dan menunggu developer mengeklik komponen target. Menghasilkan selector unik, design tokens, DOM tree, dan screenshot.',
+    '[PROACTIVE PICK] Activates interactive visual inspector overlay on the browser screen and waits for developer to click the target component. Returns unique CSS selector, design tokens, DOM tree, framework origin, and screenshot.',
     pickElementSchema,
     pickElementHandler
   );
