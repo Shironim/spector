@@ -7,6 +7,7 @@ dist/
 .gemini/
 .verity/
 .agents/
+.codegraph/
 
 # Septum local database and cache
 .septum/*.db*
