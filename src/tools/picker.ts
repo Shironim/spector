@@ -74,6 +74,16 @@ export function registerPickerTool(server: McpServer): void {
     'spector_get_last_picked',
     async ({ clearAfterRead }: any) => {
     const manager = BrowserManager.getInstance();
+    if (!manager.isAttached()) {
+      return {
+        content: [
+          {
+            type: 'text',
+            text: '[NOTE: Chrome browser is not attached yet. Pressing Alt+P requires an active attached Chrome session. Run spector_attach to connect.]\nNo element or section has been picked yet.'
+          }
+        ]
+      };
+    }
     const result = manager.getLastPickedElement(clearAfterRead ?? false);
 
     if (!result) {

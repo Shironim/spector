@@ -101,7 +101,13 @@ export class BrowserManager {
   }
 
   public isAttached(): boolean {
-    return this.browser !== null && this.context !== null && this.page !== null && !this.page.isClosed();
+    return (
+      this.browser !== null &&
+      this.browser.isConnected() &&
+      this.context !== null &&
+      this.page !== null &&
+      !this.page.isClosed()
+    );
   }
 
   public async attach(
@@ -450,7 +456,7 @@ export class BrowserManager {
   }
 
   public async listTabs(): Promise<TabInfo[]> {
-    if (!this.context) {
+    if (!this.browser || !this.browser.isConnected() || !this.context) {
       await this.attach(this.cdpUrl, true);
     }
     if (!this.context) {
@@ -480,7 +486,7 @@ export class BrowserManager {
   }
 
   public async selectTab(criteria: TabSelectCriteria): Promise<ActiveTabInfo> {
-    if (!this.context) {
+    if (!this.browser || !this.browser.isConnected() || !this.context) {
       await this.attach(this.cdpUrl, true);
     }
     if (!this.context) {
@@ -765,7 +771,8 @@ export class BrowserManager {
     if (url === 'reload') {
       await page.reload({ waitUntil });
     } else {
-      await page.goto(url, { waitUntil });
+      const effectiveUrl = /^[a-zA-Z]+:\/\//.test(url) ? url : `http://${url}`;
+      await page.goto(effectiveUrl, { waitUntil });
     }
 
     return {
