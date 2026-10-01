@@ -2,44 +2,48 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
 import type { McpToolContent } from '../types.js';
+import { instrumentHandler } from '../utils/tool-instrument.js';
 
 export function registerScreenshotTool(server: McpServer): void {
   const screenshotSchema = {
     selector: z
       .string()
       .optional()
-      .describe('Selector elemen spesifik jika hanya ingin menangkap screenshot elemen tertentu (e.g. "#header", ".pricing-table")'),
+      .describe('Specific element selector to capture only that targeted element (e.g. "#header", ".pricing-table")'),
     fullPage: z
       .boolean()
       .optional()
-      .describe('Ambil screenshot seluruh tinggi halaman yang bisa di-scroll (default: false)')
+      .describe('Capture entire scrollable page height (default: false)')
   };
 
-  const screenshotHandler = async ({ selector, fullPage }: any) => {
-    const manager = BrowserManager.getInstance();
-    const buffer = await manager.captureScreenshot(selector, fullPage ?? false);
-    const base64Data = buffer.toString('base64');
+  const screenshotHandler = instrumentHandler(
+    'spector_capture_screenshot',
+    async ({ selector, fullPage }: any) => {
+      const manager = BrowserManager.getInstance();
+      const buffer = await manager.captureScreenshot(selector, fullPage ?? false);
+      const base64Data = buffer.toString('base64');
 
-    const contentBlocks: McpToolContent[] = [
-      {
-        type: 'image',
-        data: base64Data,
-        mimeType: 'image/png'
-      },
-      {
-        type: 'text',
-        text: `Screenshot captured successfully${selector ? ` for selector "${selector}"` : ''} (${Math.round(buffer.length / 1024)} KB).`
-      }
-    ];
+      const contentBlocks: McpToolContent[] = [
+        {
+          type: 'image',
+          data: base64Data,
+          mimeType: 'image/png'
+        },
+        {
+          type: 'text',
+          text: `Screenshot captured successfully${selector ? ` for selector "${selector}"` : ''} (${Math.round(buffer.length / 1024)} KB).`
+        }
+      ];
 
-    return {
-      content: contentBlocks
-    };
-  };
+      return {
+        content: contentBlocks
+      };
+    }
+  );
 
   server.tool(
     'spector_capture_screenshot',
-    '[VISUAL AUDIT: PIXEL SNAPSHOT] Menghasilkan tangkapan layar (screenshot) halaman aktif atau elemen spesifik untuk verifikasi visual pixel-perfect dan layout rendering.',
+    '[VISUAL AUDIT: PIXEL SNAPSHOT] Captures a screenshot of the active page or a specific target element for visual verification and layout inspection.',
     screenshotSchema,
     screenshotHandler
   );

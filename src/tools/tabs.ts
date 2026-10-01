@@ -2,63 +2,70 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
 import { jsonResponse } from '../types.js';
+import { instrumentHandler } from '../utils/tool-instrument.js';
 
 export function registerTabsTools(server: McpServer): void {
-  const listTabsHandler = async () => {
-    const manager = BrowserManager.getInstance();
-    const tabs = await manager.listTabs();
+  const listTabsHandler = instrumentHandler(
+    'spector_list_tabs',
+    async () => {
+      const manager = BrowserManager.getInstance();
+      const tabs = await manager.listTabs();
 
-    return jsonResponse(tabs);
-  };
+      return jsonResponse(tabs);
+    }
+  );
 
   const selectTabSchema = {
     index: z
       .number()
       .optional()
-      .describe('Index tab target (dari output spector_list_tabs)'),
+      .describe('Target tab index (from spector_list_tabs output)'),
     url: z
       .string()
       .optional()
-      .describe('Substring pencocokan URL target (e.g. "localhost:3000", "admin")'),
+      .describe('Target URL substring to match (e.g. "localhost:3000", "admin")'),
     urlPattern: z
       .string()
       .optional()
-      .describe('Regex pattern untuk mencocokkan URL target secara presisi (e.g. "^https?:\\/\\/.*\\/checkout")'),
+      .describe('Regex pattern to match target URL precisely (e.g. "^https?:\\/\\/.*\\/checkout")'),
     title: z
       .string()
       .optional()
-      .describe('Substring pencocokan judul halaman target'),
+      .describe('Target page title substring to match'),
     debugSessionId: z
       .string()
       .optional()
-      .describe('ID sesi korelasi multi-tool (e.g. dari window.__debugSessionId)')
+      .describe('Multi-tool correlation session ID (e.g. from window.__debugSessionId)')
   };
 
-  const selectTabHandler = async ({ index, url, urlPattern, title, debugSessionId }: any) => {
-    const manager = BrowserManager.getInstance();
-    const result = await manager.selectTab({ index, url, urlPattern, title, debugSessionId });
+  const selectTabHandler = instrumentHandler(
+    'spector_select_tab',
+    async ({ index, url, urlPattern, title, debugSessionId }: any) => {
+      const manager = BrowserManager.getInstance();
+      const result = await manager.selectTab({ index, url, urlPattern, title, debugSessionId });
 
-    return jsonResponse({
-      status: 'tab_selected',
-      activeTab: {
-        title: result.title,
-        url: result.url,
-        viewport: result.viewport
-      }
-    });
-  };
+      return jsonResponse({
+        status: 'tab_selected',
+        activeTab: {
+          title: result.title,
+          url: result.url,
+          viewport: result.viewport
+        }
+      });
+    }
+  );
 
   // Primary Spector tools
   server.tool(
     'spector_list_tabs',
-    '[ROUTING: DISCOVER TABS] Melihat daftar seluruh tab yang terbuka pada instance browser Chrome yang terhubung beserta status aktifnya.',
+    '[ROUTING: DISCOVER TABS] Lists all open tabs in the attached Chrome browser instance along with their active focus state.',
     {},
     listTabsHandler
   );
 
   server.tool(
     'spector_select_tab',
-    '[ROUTING: SWITCH TAB] Berpindah fokus ke tab spesifik berdasarkan index, filter URL, atau judul halaman.',
+    '[ROUTING: SWITCH TAB] Switches active focus to a specific tab by index, URL filter, or page title.',
     selectTabSchema,
     selectTabHandler
   );

@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
 import { textResponse } from '../types.js';
+import { instrumentHandler } from '../utils/tool-instrument.js';
 
 function formatCompactNetworkLogs(logs: any[]): string {
   const lines = logs.map(log => {
@@ -26,30 +27,32 @@ export function registerNetworkTool(server: McpServer): void {
     filter: z
       .string()
       .optional()
-      .describe('Filter string atau regex untuk URL (e.g. "/api/", "users", "graphql")'),
+      .describe('Filter string or regex pattern for URLs (e.g. "/api/", "users", "graphql")'),
     statusFilter: z
       .enum(['all', 'errors_only', '4xx', '5xx'])
       .optional()
-      .describe('Filter berdasarkan status HTTP: "all", "errors_only" (>= 400 atau network failed), "4xx", "5xx" (default: "all")'),
+      .describe('Filter by HTTP status: "all", "errors_only" (>= 400 or network failure), "4xx", "5xx" (default: "all")'),
     includeStaticAssets: z
       .boolean()
       .optional()
-      .describe('Sertakan aset statis seperti CSS, font, gambar, media (default: false, hanya fetch/xhr/document untuk mencegah context rot)'),
+      .describe('Include static assets such as CSS, fonts, images, media (default: false, only fetch/xhr/document to prevent context rot)'),
     limit: z
       .number()
       .optional()
-      .describe('Batas maksimal entri log terbaru yang dikembalikan (default: 25)'),
+      .describe('Maximum number of recent log entries to return (default: 25)'),
     format: z
       .enum(['compact', 'verbose'])
       .optional()
-      .describe('Format output: "compact" (ringkasan 1 baris/request, sangat hemat token) atau "verbose" (full JSON) (default: "compact")'),
+      .describe('Output format: "compact" (token-lean 1 line per request) or "verbose" (full JSON) (default: "compact")'),
     clearAfterRead: z
       .boolean()
       .optional()
-      .describe('Hapus buffer log setelah dibaca agar pemanggilan berikutnya hanya mendapat log baru (default: true)')
+      .describe('Clear log buffer after reading so subsequent calls only return new logs (default: true)')
   };
 
-  const networkHandler = async ({ filter, clearAfterRead, statusFilter, includeStaticAssets, limit, format }: any) => {
+  const networkHandler = instrumentHandler(
+    'spector_get_network_logs',
+    async ({ filter, clearAfterRead, statusFilter, includeStaticAssets, limit, format }: any) => {
     const manager = BrowserManager.getInstance();
     const logs = manager.getNetworkLogs(
       filter,
@@ -69,14 +72,88 @@ export function registerNetworkTool(server: McpServer): void {
         : formatCompactNetworkLogs(logs);
 
     return textResponse(outputText);
-  };
+  });
 
   server.tool(
     'spector_get_network_logs',
-    '[TELEMETRY: API & NETWORK AUDIT] Mengambil log network request/response (XHR, fetch, API payload, HTTP status 4xx/5xx). Secara default memfilter asset statis dan mengembalikan ringkasan compact untuk mencegah context rot. Gunakan saat form gagal submit, data API tidak tampil, atau ingin memeriksa payload backend.',
+    '[TELEMETRY: API & NETWORK AUDIT] Captures network requests and responses (XHR, fetch, API payloads, HTTP 4xx/5xx status). Filters static assets by default and returns compact summaries to prevent context rot. Use when forms fail to submit, API data does not render, or investigating backend payloads.',
     networkSchema,
     networkHandler
   );
 
   server.tool('browser_get_network_logs', '[Alias for spector_get_network_logs]', networkSchema, networkHandler);
+
+  const mockSchema = {
+    action: z
+      .enum(['set', 'clear', 'list'])
+      .describe('Mock action: "set" (register new route mock), "clear" (remove specific or all mock routes), "list" (inspect active mocks)'),
+    urlPattern: z
+      .string()
+      .optional()
+      .describe('URL endpoint pattern (glob string or wildcard, e.g. "**/api/users/**", "*/v1/products", "https://api.example.com/*")'),
+    status: z
+      .number()
+      .optional()
+      .describe('Simulated HTTP status code (default: 200, or 400, 422, 500 for error testing)'),
+    body: z
+      .string()
+      .optional()
+      .describe('Response body payload (JSON string or plain text)'),
+    contentType: z
+      .string()
+      .optional()
+      .describe('Response content-type header (default: "application/json")'),
+    delayMs: z
+      .number()
+      .optional()
+      .describe('Simulated network latency in milliseconds (e.g. 1000 for 1 second)')
+  };
+
+  const mockHandler = instrumentHandler(
+    'spector_mock_network',
+    async ({ action, urlPattern, status, body, contentType, delayMs }: any) => {
+      const manager = BrowserManager.getInstance();
+
+      if (action === 'set') {
+        if (!urlPattern) {
+          return textResponse('Error: "urlPattern" is required when action is "set".', true);
+        }
+        const rule = await manager.setNetworkMock({
+          urlPattern,
+          status,
+          body,
+          contentType,
+          delayMs
+        });
+        return textResponse(`[MOCK ACTIVE] Route "${rule.urlPattern}" successfully intercepted -> Status: ${rule.status}, Type: ${rule.contentType}`);
+      }
+
+      if (action === 'clear') {
+        const res = await manager.clearNetworkMock(urlPattern);
+        return textResponse(`[MOCKS CLEARED] Cleared ${res.clearedCount} mock rule(s). Active remaining: ${res.remaining.length > 0 ? res.remaining.join(', ') : 'none'}`);
+      }
+
+      if (action === 'list') {
+        const activeRules = manager.listNetworkMocks();
+        if (activeRules.length === 0) {
+          return textResponse('No active network mock rules.');
+        }
+        const summary = activeRules
+          .map(r => `• [${r.status}] ${r.urlPattern} (${r.contentType || 'application/json'}${r.delayMs ? `, delay: ${r.delayMs}ms` : ''})`)
+          .join('\n');
+        return textResponse(`[ACTIVE NETWORK MOCKS: ${activeRules.length}]\n${summary}`);
+      }
+
+      return textResponse(`Unknown action: "${action}"`, true);
+    }
+  );
+
+  server.tool(
+    'spector_mock_network',
+    '[NETWORK TESTBED: EPHEMERAL ROUTE MOCKING] Set, clear, or inspect ephemeral network route interceptors in the browser page without touching the backend database. Useful for verifying UI responses to 400, 422, 500 statuses, simulating network latency/timeouts, or testing empty/error state rendering.',
+    mockSchema,
+    mockHandler
+  );
+
+  server.tool('browser_mock_network', '[Alias for spector_mock_network]', mockSchema, mockHandler);
 }

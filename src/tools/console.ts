@@ -2,6 +2,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
 import { textResponse } from '../types.js';
+import { instrumentHandler } from '../utils/tool-instrument.js';
 
 function formatCompactConsoleLogs(logs: any[]): string {
   const lines = logs.map(log => {
@@ -18,40 +19,43 @@ export function registerConsoleTool(server: McpServer): void {
     level: z
       .enum(['all', 'error', 'warn'])
       .optional()
-      .describe('Filter tingkat keparahan log (default: "error")'),
+      .describe('Log severity filter (default: "error")'),
     limit: z
       .number()
       .optional()
-      .describe('Batas maksimal entri log terbaru yang dikembalikan (default: 50)'),
+      .describe('Maximum recent log entries to return (default: 50)'),
     format: z
       .enum(['compact', 'verbose'])
       .optional()
-      .describe('Format output: "compact" (ringkasan 1 baris/log, hemat token) atau "verbose" (full JSON) (default: "compact")'),
+      .describe('Output format: "compact" (token-lean 1 line per log) or "verbose" (full JSON) (default: "compact")'),
     clearAfterRead: z
       .boolean()
       .optional()
-      .describe('Hapus log setelah dibaca (default: true)')
+      .describe('Clear log buffer after reading (default: true)')
   };
 
-  const consoleHandler = async ({ level, clearAfterRead, limit, format }: any) => {
-    const manager = BrowserManager.getInstance();
-    const logs = manager.getConsoleLogs(level ?? 'error', clearAfterRead ?? true, limit ?? 50);
+  const consoleHandler = instrumentHandler(
+    'spector_get_console_logs',
+    async ({ level, clearAfterRead, limit, format }: any) => {
+      const manager = BrowserManager.getInstance();
+      const logs = manager.getConsoleLogs(level ?? 'error', clearAfterRead ?? true, limit ?? 50);
 
-    if (logs.length === 0) {
-      return textResponse(`No console logs found for level: ${level ?? 'error'}.`);
+      if (logs.length === 0) {
+        return textResponse(`No console logs found for level: ${level ?? 'error'}.`);
+      }
+
+      const outputText =
+        (format ?? 'compact') === 'verbose'
+          ? JSON.stringify(logs, null, 2)
+          : formatCompactConsoleLogs(logs);
+
+      return textResponse(outputText);
     }
-
-    const outputText =
-      (format ?? 'compact') === 'verbose'
-        ? JSON.stringify(logs, null, 2)
-        : formatCompactConsoleLogs(logs);
-
-    return textResponse(outputText);
-  };
+  );
 
   server.tool(
     'spector_get_console_logs',
-    '[TELEMETRY: RUNTIME CONSOLE & CRASHES] Mengambil log konsol browser (console.error, uncaught runtime exception, React/Vue hydration warning, broken assets). Secara default difilter pada tingkat error dan format compact untuk mencegah context rot. Gunakan saat terjadi perilaku aneh atau halaman blank/crash.',
+    '[TELEMETRY: RUNTIME CONSOLE & CRASHES] Retrieves browser console logs (console.error, uncaught runtime exceptions, Vue/React hydration warnings, broken script assets). Filtered by error severity and compact format by default to prevent context rot. Use when encountering unexpected UI behavior, broken scripts, or blank pages.',
     consoleSchema,
     consoleHandler
   );
