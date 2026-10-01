@@ -4,6 +4,7 @@ import process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { BrowserManager } from './browser-manager.js';
+import { logger } from './utils/logger.js';
 import { registerAttachTool } from './tools/attach.js';
 import { registerDomTool } from './tools/dom.js';
 import { registerScreenshotTool } from './tools/screenshot.js';
@@ -30,13 +31,13 @@ async function main() {
   }
 
   if (args.includes('--version') || args.includes('-v')) {
-    console.log('1.0.1');
+    console.log('1.0.2');
     process.exit(0);
   }
 
   const server = new McpServer({
     name: 'spector',
-    version: '1.0.1'
+    version: '1.0.2'
   });
 
   // Register all modular tools
@@ -55,21 +56,21 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  console.error('[spector] MCP Server running on stdio');
+  logger.info('spector_started', { version: '1.0.2', transport: 'stdio' });
 
   // Eager non-blocking attach to dedicated dev window if already running on port 9222
   BrowserManager.getInstance()
     .attach('http://localhost:9222', true, false)
     .then(info => {
-      console.error(`[spector] Eagerly attached to Chrome window (${info.title})`);
+      logger.info('cdp_eagerly_attached', { title: info.title, url: info.url });
     })
     .catch(() => {
-      // Chrome dev profile is not running yet; will attach on-demand when tool is called
+      logger.debug('cdp_eager_attach_idle', { message: 'Chrome dev profile is not running yet; will attach on-demand when tool is called' });
     });
 
   // Handle clean disconnection
   const cleanup = async () => {
-    console.error('[spector] Shutting down, disconnecting from Chrome CDP...');
+    logger.info('spector_shutting_down', { action: 'disconnecting_cdp' });
     try {
       await BrowserManager.getInstance().disconnect();
     } catch {
