@@ -54,6 +54,9 @@ export function registerNetworkTool(server: McpServer): void {
     'spector_get_network_logs',
     async ({ filter, clearAfterRead, statusFilter, includeStaticAssets, limit, format }: any) => {
     const manager = BrowserManager.getInstance();
+    if (!manager.isAttached()) {
+      return textResponse('[NOTE: Chrome browser is not attached yet. No network telemetry listeners are active. Run spector_attach to connect.]\nNo network requests recorded matching the criteria.');
+    }
     const logs = manager.getNetworkLogs(
       filter,
       clearAfterRead ?? true,
@@ -114,7 +117,7 @@ export function registerNetworkTool(server: McpServer): void {
 
       if (action === 'set') {
         if (!urlPattern) {
-          return textResponse('Error: "urlPattern" is required when action is "set".', true);
+          throw new Error('Parameter "urlPattern" is required when action is "set".');
         }
         const rule = await manager.setNetworkMock({
           urlPattern,
@@ -142,7 +145,7 @@ export function registerNetworkTool(server: McpServer): void {
         return textResponse(`[ACTIVE NETWORK MOCKS: ${activeRules.length}]\n${summary}`);
       }
 
-      return textResponse(`Unknown action: "${action}"`, true);
+      throw new Error(`Unknown action: "${action}". Must be "set", "clear", or "list".`);
     }
   );
 

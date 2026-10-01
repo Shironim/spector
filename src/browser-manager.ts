@@ -100,6 +100,10 @@ export class BrowserManager {
     return BrowserManager.instance;
   }
 
+  public isAttached(): boolean {
+    return this.browser !== null && this.context !== null && this.page !== null && !this.page.isClosed();
+  }
+
   public async attach(
     cdpUrl: string = 'http://localhost:9222',
     autoSelectActiveTab: boolean = true,
@@ -230,7 +234,7 @@ export class BrowserManager {
     // 3. No remaining open pages or context dead: re-attach
     await this.attach(this.cdpUrl, true);
     if (!this.page) {
-      throw new Error('No active page available. Please call browser_attach first.');
+      throw new Error('No active page available. Please call spector_attach first.');
     }
     return this.page;
   }
@@ -450,7 +454,7 @@ export class BrowserManager {
       await this.attach(this.cdpUrl, true);
     }
     if (!this.context) {
-      throw new Error('No active browser context available. Call browser_attach first.');
+      throw new Error('No active browser context available. Call spector_attach first.');
     }
 
     const pages = this.context.pages();
@@ -480,7 +484,7 @@ export class BrowserManager {
       await this.attach(this.cdpUrl, true);
     }
     if (!this.context) {
-      throw new Error('No active browser context available. Call browser_attach first.');
+      throw new Error('No active browser context available. Call spector_attach first.');
     }
 
     const pages = this.context.pages().filter(p => !p.isClosed());

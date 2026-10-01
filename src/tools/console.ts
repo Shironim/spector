@@ -38,6 +38,9 @@ export function registerConsoleTool(server: McpServer): void {
     'spector_get_console_logs',
     async ({ level, clearAfterRead, limit, format }: any) => {
       const manager = BrowserManager.getInstance();
+      if (!manager.isAttached()) {
+        return textResponse(`[NOTE: Chrome browser is not attached yet. No runtime console listeners are active. Run spector_attach to connect.]\nNo console logs found for level: ${level ?? 'error'}.`);
+      }
       const logs = manager.getConsoleLogs(level ?? 'error', clearAfterRead ?? true, limit ?? 50);
 
       if (logs.length === 0) {
