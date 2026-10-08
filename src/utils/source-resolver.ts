@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { SourceLocation } from '../types.js';
+import { EXTENSION_CANDIDATES, SNIPPET_LIMITS } from '../constants.js';
 
 /**
  * Resolves a client-side component origin (Vite, Webpack, Inertia, React Fiber, Vue)
@@ -25,8 +26,15 @@ export function resolveSourceLocation(
   if (rawSourceFile) {
     let cleaned = rawSourceFile
       .replace(/\?.*$/, '') // Strip Vite HMR query params like ?vue&type=script
-      .replace(/^[a-zA-Z]+:\/\/[^/]+/, '') // Strip http://localhost:5173
-      .replace(/^\/@fs\//, '') // Strip Vite /@fs/ prefix
+      .replace(/^[a-zA-Z]+:\/\/[^/]+/, ''); // Strip http://localhost:5173
+
+    // Strip Vite /@fs/ prefix while preserving root slash on POSIX
+    if (cleaned.startsWith('/@fs/')) {
+      const rest = cleaned.slice(5); // after /@fs/
+      cleaned = /^[a-zA-Z]:[/\\]/.test(rest) ? rest : `/${rest.replace(/^\/+/, '')}`;
+    }
+
+    cleaned = cleaned
       .replace(/^\/resources\//, 'resources/')
       .replace(/^\/src\//, 'src/');
 
@@ -35,15 +43,33 @@ export function resolveSourceLocation(
       cleaned = cleaned.slice(1);
     }
 
+    const candidateExtensions = EXTENSION_CANDIDATES;
+    const probeFile = (target: string): string | null => {
+      if (fs.existsSync(target)) {
+        try {
+          if (fs.statSync(target).isFile()) return target;
+        } catch {
+          // Ignore
+        }
+      }
+      for (const ext of candidateExtensions) {
+        const withExt = target + ext;
+        if (fs.existsSync(withExt)) return withExt;
+      }
+      return null;
+    };
+
     // Direct absolute path check
-    if (path.isAbsolute(cleaned) && fs.existsSync(cleaned)) {
-      targetPath = cleaned;
+    if (path.isAbsolute(cleaned)) {
+      const resolved = probeFile(cleaned);
+      if (resolved) targetPath = resolved;
     } else {
       // Relative path resolution across candidate workspace roots
       for (const root of candidateRoots) {
         const candidate = path.resolve(root, cleaned);
-        if (fs.existsSync(candidate)) {
-          targetPath = candidate;
+        const resolved = probeFile(candidate);
+        if (resolved) {
+          targetPath = resolved;
           break;
         }
       }
@@ -52,7 +78,7 @@ export function resolveSourceLocation(
 
   // 2. If sourceFile was not directly resolvable, search workspace by componentName
   if (!targetPath && componentName && componentName !== 'Anonymous') {
-    const candidateExtensions = ['.vue', '.tsx', '.jsx', '.svelte', '.blade.php'];
+    const candidateExtensions = EXTENSION_CANDIDATES;
     const searchDirs = [
       'src/components',
       'src/views',
@@ -116,17 +142,18 @@ export function resolveSourceLocation(
   if (/^[a-zA-Z]:/.test(fileUrlPath)) {
     fileUrlPath = fileUrlPath.charAt(0).toLowerCase() + fileUrlPath.slice(1);
   }
-  const fileUrl = `file:///${fileUrlPath}#L${cleanLine}`;
+  const prefix = fileUrlPath.startsWith('/') ? 'file://' : 'file:///';
+  const fileUrl = `${prefix}${fileUrlPath}#L${cleanLine}`;
 
   // Read snippet around target line if feasible
   let snippet: string | undefined;
   try {
     const stat = fs.statSync(targetPath);
-    if (stat.size <= 200000) { // <= 200 KB
+    if (stat.size <= SNIPPET_LIMITS.MAX_FILE_SIZE_BYTES) {
       const content = fs.readFileSync(targetPath, 'utf8');
       const lines = content.split('\n');
-      const startIdx = Math.max(0, cleanLine - 3);
-      const endIdx = Math.min(lines.length, cleanLine + 2);
+      const startIdx = Math.max(0, cleanLine - SNIPPET_LIMITS.CONTEXT_LINES_BEFORE);
+      const endIdx = Math.min(lines.length, cleanLine + SNIPPET_LIMITS.CONTEXT_LINES_AFTER);
       const snippetLines: string[] = [];
       for (let i = startIdx; i < endIdx; i++) {
         const lineNum = i + 1;

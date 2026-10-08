@@ -22,19 +22,23 @@ function detectFrameworkComponent(el) {
   while (curr && curr !== document.body && curr !== document.documentElement) {
     // 1. Vue 3 detection (__vueParentComponent)
     if (curr.__vueParentComponent) {
-      const comp = curr.__vueParentComponent;
-      const type = comp.type || {};
-      const file = type.__file || comp.subTree?.type?.__file;
-      const rawName = type.__name || type.name || (file ? file.split(/[\\\\/]/).pop().replace(/\\.\\w+$/, '') : null);
-      const name = rawName && rawName !== 'Anonymous' ? rawName : undefined;
-      const props = comp.props ? Object.keys(comp.props).filter(k => !k.startsWith('__')) : undefined;
-
-      return {
-        framework: 'vue',
-        componentName: name,
-        sourceFile: file,
-        props: props && props.length > 0 ? props.slice(0, 10) : undefined
-      };
+      let comp = curr.__vueParentComponent;
+      while (comp) {
+        const type = comp.type || {};
+        const file = type.__file || comp.subTree?.type?.__file;
+        const rawName = type.__name || type.name || (file ? file.split(/[\\\\/]/).pop().replace(/\\.\\w+$/, '') : null);
+        const name = rawName && rawName !== 'Anonymous' ? rawName : undefined;
+        if (name || file) {
+          const props = comp.props ? Object.keys(comp.props).filter(k => !k.startsWith('__')) : undefined;
+          return {
+            framework: 'vue',
+            componentName: name,
+            sourceFile: file,
+            props: props && props.length > 0 ? props.slice(0, 10) : undefined
+          };
+        }
+        comp = comp.parent;
+      }
     }
 
     // 2. Vue 2 detection (__vue__)
@@ -55,7 +59,13 @@ function detectFrameworkComponent(el) {
       let fiber = curr[fiberKey];
       while (fiber) {
         if (typeof fiber.type === 'function' || (fiber.type && typeof fiber.type === 'object')) {
-          const name = fiber.type.displayName || fiber.type.name;
+          const name =
+            fiber.type.displayName ||
+            fiber.type.name ||
+            fiber.type.type?.displayName ||
+            fiber.type.type?.name ||
+            fiber.type.render?.displayName ||
+            fiber.type.render?.name;
           if (name && name !== 'Anonymous') {
             const source = fiber._debugSource;
             const props = fiber.memoizedProps ? Object.keys(fiber.memoizedProps).filter(k => k !== 'children') : undefined;
@@ -123,7 +133,7 @@ function detectFrameworkComponent(el) {
           return {
             framework: 'inertia',
             componentName: dataPage.component,
-            sourceFile: 'resources/js/Pages/' + dataPage.component + '.vue'
+            sourceFile: 'resources/js/Pages/' + dataPage.component
           };
         }
       } catch {
