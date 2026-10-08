@@ -25,16 +25,28 @@ export function instrumentHandler<TArgs = any>(
   };
 }
 
+import { TELEMETRY_LIMITS } from '../constants.js';
+
 function sanitizeArgs(args: any): any {
   if (!args || typeof args !== 'object') return args;
   const sanitized: Record<string, unknown> = {};
-  const sensitiveKeys = ['password', 'token', 'secret', 'key', 'auth', 'credentials'];
+  const sensitivePatterns = [
+    /password/i,
+    /token/i,
+    /secret/i,
+    /api[_-]?key/i,
+    /private[_-]?key/i,
+    /auth/i,
+    /credentials/i
+  ];
 
   for (const [k, v] of Object.entries(args)) {
-    if (sensitiveKeys.some(s => k.toLowerCase().includes(s))) {
+    // Properti 'key' tunggal biasanya adalah penekanan tombol keyboard (e.g. 'Enter'), jangan sensor kecuali pola sensitive lain cocok
+    const isSensitive = k.toLowerCase() !== 'key' && sensitivePatterns.some(pattern => pattern.test(k));
+    if (isSensitive) {
       sanitized[k] = '[REDACTED]';
-    } else if (typeof v === 'string' && v.length > 200) {
-      sanitized[k] = v.slice(0, 197) + '...';
+    } else if (typeof v === 'string' && v.length > TELEMETRY_LIMITS.ARG_STRING_TRUNCATE_LEN) {
+      sanitized[k] = v.slice(0, TELEMETRY_LIMITS.ARG_STRING_TRUNCATE_LEN - 3) + '...';
     } else {
       sanitized[k] = v;
     }
