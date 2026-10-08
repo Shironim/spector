@@ -1,14 +1,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
-import { textResponse } from '../types.js';
+import { textResponse, envelopeResponse } from '../types.js';
 import { instrumentHandler } from '../utils/tool-instrument.js';
 
 export function registerInteractTool(server: McpServer): void {
   const interactSchema = {
     action: z
-      .enum(['click', 'type', 'fill', 'hover', 'scroll', 'scrollIntoView', 'press_key'])
-      .describe('User action to dispatch: "click", "hover", "type", "fill", "scroll", "scrollIntoView" (scrolls target directly into center of viewport), "press_key"'),
+      .enum(['click', 'type', 'fill', 'hover', 'scroll', 'scrollIntoView', 'scroll_into_view', 'press_key', 'pressKey'])
+      .describe('User action to dispatch: "click", "hover", "type", "fill", "scroll", "scrollIntoView", "press_key" (or "pressKey")'),
     selector: z
       .string()
       .optional()
@@ -20,11 +20,12 @@ export function registerInteractTool(server: McpServer): void {
     clearFirst: z
       .boolean()
       .optional()
+      .default(false)
       .describe('Clear existing text before typing when action is "type" (default: false)'),
     key: z
       .string()
       .optional()
-      .describe('Keyboard key code when action is "press_key" (e.g. "Enter", "Escape", "Tab")'),
+      .describe('Keyboard key code when action is "press_key" / "pressKey" (e.g. "Enter", "Escape", "Tab")'),
     scrollDelta: z
       .object({
         x: z.number().optional().describe('Horizontal scroll delta in pixels'),
@@ -43,23 +44,35 @@ export function registerInteractTool(server: McpServer): void {
     waitForNavigation: z
       .boolean()
       .optional()
+      .default(false)
       .describe('Wait for page navigation or URL transition to finish after click interaction (default: false)'),
     waitForTimeoutMs: z
       .number()
       .optional()
-      .describe('Additional delay (ms) after interaction to allow CSS animations or UI re-renders to settle (default: 0)')
+      .default(0)
+      .describe('Additional delay (ms) after interaction to allow CSS animations or UI re-renders to settle (default: 0)'),
+    delayMs: z
+      .number()
+      .optional()
+      .describe('Alias for waitForTimeoutMs (additional delay in ms after interaction)')
   };
 
   const interactHandler = instrumentHandler(
     'spector_interact',
-    async ({ action, selector, text, clearFirst, key, scrollDelta, scrollX, scrollY, waitForNavigation, waitForTimeoutMs }: any) => {
+    async ({ action, selector, text, clearFirst, key, scrollDelta, scrollX, scrollY, waitForNavigation, waitForTimeoutMs, delayMs }: any) => {
       const manager = BrowserManager.getInstance();
-      const effectiveDelta = (scrollDelta || scrollX !== undefined || scrollY !== undefined)
+      const effectiveTimeout = waitForTimeoutMs ?? delayMs ?? 0;
+      const effectiveDelta = scrollDelta
         ? {
-            x: scrollDelta?.x ?? scrollX ?? 0,
-            y: scrollDelta?.y ?? scrollY ?? 300
+            x: scrollDelta.x ?? 0,
+            y: scrollDelta.y ?? 0
           }
-        : undefined;
+        : (scrollX !== undefined || scrollY !== undefined)
+          ? {
+              x: scrollX ?? 0,
+              y: scrollY ?? 300
+            }
+          : undefined;
 
       const message = await manager.interact(
         action,
@@ -69,10 +82,10 @@ export function registerInteractTool(server: McpServer): void {
         effectiveDelta,
         clearFirst ?? false,
         waitForNavigation ?? false,
-        waitForTimeoutMs ?? 0
+        effectiveTimeout
       );
 
-      return textResponse(message);
+      return envelopeResponse(true, message);
     }
   );
 

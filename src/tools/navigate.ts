@@ -12,6 +12,7 @@ export function registerNavigateTool(server: McpServer): void {
     waitUntil: z
       .enum(['load', 'domcontentloaded', 'networkidle'])
       .optional()
+      .default('load')
       .describe('Navigation completion condition (default: "load")')
   };
 

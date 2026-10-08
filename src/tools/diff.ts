@@ -13,7 +13,8 @@ export function registerDiffTool(server: McpServer): void {
     resetBaseline: z
       .boolean()
       .optional()
-      .describe('Set to true to capture a fresh baseline from current DOM state')
+      .default(false)
+      .describe('Set to true to capture a fresh baseline from current DOM state (default: false)')
   };
 
   const diffHandler = instrumentHandler(

@@ -9,6 +9,7 @@ import { IN_BROWSER_COMPONENT_DETECTOR_FN } from './utils/framework-detector.js'
 import { captureDomSnapshot, compareDomSnapshots, type DomSnapshotData, type DomDiffResult } from './utils/dom-differ.js';
 import { resolveSourceLocation } from './utils/source-resolver.js';
 import { logger } from './utils/logger.js';
+import { TIMEOUTS, TELEMETRY_LIMITS } from './constants.js';
 
 function validateCdpEndpoint(endpoint: string): void {
   try {
@@ -45,7 +46,7 @@ function findChromeExecutable(): string | null {
   }
 }
 
-async function waitForCdp(cdpUrl: string, maxWaitMs = 6000): Promise<boolean> {
+async function waitForCdp(cdpUrl: string, maxWaitMs = TIMEOUTS.CDP_WAIT_MS): Promise<boolean> {
   const endpoint = `${cdpUrl.replace(/\/$/, '')}/json/version`;
   const startTime = Date.now();
   while (Date.now() - startTime < maxWaitMs) {
@@ -58,6 +59,14 @@ async function waitForCdp(cdpUrl: string, maxWaitMs = 6000): Promise<boolean> {
     await new Promise(resolve => setTimeout(resolve, 300));
   }
   return false;
+}
+
+export function escapeTailwindSelector(selector: string): string {
+  if (!selector) return selector;
+  return selector.replace(/\.([a-zA-Z0-9_\-:/%]+(?:\.\d+)?(?:\[[^\]]+\][a-zA-Z0-9_\-:/%]*)?)/g, (_match, className) => {
+    const escapedClass = className.replace(/(?<!\\)([:/\[\]#%.])/g, '\\$1');
+    return '.' + escapedClass;
+  });
 }
 
 export class BrowserManager {
@@ -119,13 +128,8 @@ export class BrowserManager {
     this.cdpUrl = cdpUrl;
 
     try {
-      // Disconnect previous session if any
+      // Detach previous session handle if any (do not close host Chrome process)
       if (this.browser) {
-        try {
-          await this.browser.close();
-        } catch {
-          // Ignore close error on stale handle
-        }
         this.browser = null;
         this.context = null;
         this.page = null;
@@ -154,7 +158,7 @@ export class BrowserManager {
         );
         child.unref();
 
-        const isReady = await waitForCdp(this.cdpUrl, 6000);
+        const isReady = await waitForCdp(this.cdpUrl, TIMEOUTS.CDP_WAIT_MS);
         if (isReady) {
           this.browser = await chromium.connectOverCDP(this.cdpUrl);
         } else {
@@ -273,9 +277,6 @@ export class BrowserManager {
         }
       }
     });
-
-    // Clear old page-level request mappings
-    this.pendingRequests.clear();
 
     // Register Alt+P hotkey inspector bridge
     this.setupHotkeyPicker(page).catch(() => {});
@@ -422,12 +423,6 @@ export class BrowserManager {
       }
     });
 
-    page.on('close', () => {
-      if (this.page === page) {
-        this.page = null;
-      }
-    });
-
     // Reapply any active ephemeral mock rules to newly attached page
     this.applyAllMockRules(page).catch(() => {});
   }
@@ -435,20 +430,23 @@ export class BrowserManager {
   public async getDomTree(
     selector?: string,
     includeBoundingBox: boolean = true,
-    includeOffscreen: boolean = false
+    includeOffscreen: boolean = false,
+    maxDepth: number = 8
   ): Promise<string> {
     const page = await this.ensurePage();
-    return await extractCompressedDom(page, { selector, includeBoundingBox, includeOffscreen });
+    const effectiveSelector = selector ? escapeTailwindSelector(selector) : selector;
+    return await extractCompressedDom(page, { selector: effectiveSelector, includeBoundingBox, includeOffscreen, maxDepth });
   }
 
   public async captureScreenshot(selector?: string, fullPage: boolean = false): Promise<Buffer> {
     const page = await this.ensurePage();
     if (selector) {
-      const locator = page.locator(selector).first();
+      const effectiveSelector = escapeTailwindSelector(selector);
+      const locator = page.locator(effectiveSelector).first();
       try {
-        await locator.waitFor({ state: 'visible', timeout: 4000 });
+        await locator.waitFor({ state: 'visible', timeout: TIMEOUTS.SCREENSHOT_DEFAULT_MS });
       } catch {
-        throw new Error(`Element with selector "${selector}" was not visible on the page after 4s timeout.`);
+        throw new Error(`Element with selector "${selector}" was not visible on the page after ${TIMEOUTS.SCREENSHOT_DEFAULT_MS / 1000}s timeout.`);
       }
       return await locator.screenshot();
     }
@@ -498,6 +496,20 @@ export class BrowserManager {
       throw new Error('No open tabs found in the browser.');
     }
 
+    const providedCriteria = [
+      criteria.debugSessionId ? 'debugSessionId' : null,
+      criteria.index !== undefined ? 'index' : null,
+      criteria.urlPattern ? 'urlPattern' : null,
+      criteria.url ? 'url' : null,
+      criteria.title ? 'title' : null
+    ].filter(Boolean) as string[];
+
+    let warning: string | undefined;
+    if (providedCriteria.length > 1) {
+      warning = `Multiple tab selection criteria provided (${providedCriteria.join(', ')}). Evaluated by priority order: ${providedCriteria[0]} took precedence, secondary criteria were ignored.`;
+      logger.warn('select_tab_multi_criteria', { provided: providedCriteria, selectedBy: providedCriteria[0] });
+    }
+
     let targetPage: Page | undefined;
 
     if (criteria.debugSessionId) {
@@ -520,8 +532,15 @@ export class BrowserManager {
       }
       targetPage = pages[criteria.index];
     } else if (!targetPage && criteria.urlPattern) {
+      let patternStr = criteria.urlPattern;
+      if (patternStr.includes('*') && !patternStr.includes('.*')) {
+        patternStr = patternStr
+          .replace(/[.+?^${}()|[\]\\]/g, '\\$&')
+          .replace(/\*\*/g, '.*')
+          .replace(/\*/g, '.*');
+      }
       try {
-        const regex = new RegExp(criteria.urlPattern, 'i');
+        const regex = new RegExp(patternStr, 'i');
         targetPage = pages.find(p => regex.test(p.url()));
       } catch (err: any) {
         throw new Error(`Invalid regex urlPattern "${criteria.urlPattern}": ${err.message}`);
@@ -555,16 +574,17 @@ export class BrowserManager {
     return {
       title: title || '(No Title)',
       url,
-      viewport
+      viewport,
+      ...(warning ? { warning } : {})
     };
   }
 
   public getNetworkLogs(
     filter?: string,
     clearAfterRead: boolean = true,
-    statusFilter?: 'all' | 'errors_only' | '4xx' | '5xx',
+    statusFilter?: 'all' | 'errors_only' | 'errorsOnly' | '4xx' | '5xx',
     includeStaticAssets: boolean = false,
-    limit: number = 25
+    limit: number = TELEMETRY_LIMITS.NETWORK_LOG_DEFAULT_LIMIT
   ): NetworkLogEntry[] {
     let result = [...this.networkLogs];
 
@@ -582,12 +602,12 @@ export class BrowserManager {
       }
     }
     if (statusFilter && statusFilter !== 'all') {
-      if (statusFilter === 'errors_only') {
+      if (statusFilter === 'errors_only' || statusFilter === 'errorsOnly') {
         result = result.filter(log => (log.status !== undefined && log.status >= 400) || !!log.error);
       } else if (statusFilter === '4xx') {
         result = result.filter(log => log.status !== undefined && log.status >= 400 && log.status < 500);
       } else if (statusFilter === '5xx') {
-        result = result.filter(log => (log.status !== undefined && log.status >= 500) || !!log.error);
+        result = result.filter(log => log.status !== undefined && log.status >= 500);
       }
     }
 
@@ -596,7 +616,8 @@ export class BrowserManager {
     }
 
     if (clearAfterRead) {
-      this.networkLogs = [];
+      const returnedIds = new Set(result.map(r => r.id));
+      this.networkLogs = this.networkLogs.filter(log => !returnedIds.has(log.id));
     }
     return result;
   }
@@ -604,7 +625,7 @@ export class BrowserManager {
   public getConsoleLogs(
     level: 'all' | 'error' | 'warn' = 'error',
     clearAfterRead: boolean = true,
-    limit: number = 50
+    limit: number = TELEMETRY_LIMITS.CONSOLE_LOG_DEFAULT_LIMIT
   ): ConsoleLogEntry[] {
     let result = [...this.consoleLogs];
     if (level === 'error') {
@@ -618,13 +639,14 @@ export class BrowserManager {
     }
 
     if (clearAfterRead) {
-      this.consoleLogs = [];
+      const returnedSet = new Set(result);
+      this.consoleLogs = this.consoleLogs.filter(log => !returnedSet.has(log));
     }
     return result;
   }
 
   public async interact(
-    action: 'click' | 'type' | 'fill' | 'hover' | 'scroll' | 'scrollIntoView' | 'press_key',
+    action: 'click' | 'type' | 'fill' | 'hover' | 'scroll' | 'scrollIntoView' | 'scroll_into_view' | 'press_key' | 'pressKey',
     selector?: string,
     text?: string,
     key?: string,
@@ -634,14 +656,17 @@ export class BrowserManager {
     waitForTimeoutMs: number = 0
   ): Promise<string> {
     const page = await this.ensurePage();
+    const effectiveSelector = selector ? escapeTailwindSelector(selector) : selector;
+    const timeout = TIMEOUTS.INTERACT_DEFAULT_MS;
+    const normalizedAction = action === 'scroll_into_view' ? 'scrollIntoView' : action === 'pressKey' ? 'press_key' : action;
 
-    if (action === 'scrollIntoView') {
-      if (!selector) {
+    if (normalizedAction === 'scrollIntoView') {
+      if (!effectiveSelector) {
         throw new Error('Selector is required for action "scrollIntoView".');
       }
-      const locator = page.locator(selector).first();
+      const locator = page.locator(effectiveSelector).first();
       try {
-        await locator.waitFor({ state: 'attached', timeout: 4000 });
+        await locator.waitFor({ state: 'attached', timeout });
         await locator.evaluate((el: HTMLElement) => {
           el.scrollIntoView({ behavior: 'instant', block: 'center', inline: 'center' });
         });
@@ -650,48 +675,48 @@ export class BrowserManager {
         }
         return `Scrolled element "${selector}" into view (centered in viewport).`;
       } catch {
-        throw new Error(`Cannot perform "scrollIntoView": Element "${selector}" not attached to DOM after 4s timeout.`);
+        throw new Error(`Cannot perform "scrollIntoView": Element "${selector}" not attached to DOM after ${timeout / 1000}s timeout.`);
       }
     }
 
-    if (action === 'scroll') {
+    if (normalizedAction === 'scroll') {
       const x = scrollDelta?.x ?? 0;
-      const y = scrollDelta?.y ?? 300;
-      if (selector) {
-        const locator = page.locator(selector).first();
+      const y = scrollDelta ? (scrollDelta.y ?? 0) : 300;
+      if (effectiveSelector) {
+        const locator = page.locator(effectiveSelector).first();
         try {
-          await locator.waitFor({ state: 'attached', timeout: 4000 });
+          await locator.waitFor({ state: 'attached', timeout });
           await locator.evaluate((el, delta) => el.scrollBy(delta.x, delta.y), { x, y });
           if (waitForTimeoutMs > 0) {
             await page.waitForTimeout(waitForTimeoutMs);
           }
           return `Scrolled element "${selector}" by x=${x}, y=${y}.`;
         } catch {
-          throw new Error(`Cannot perform "scroll": Element "${selector}" not attached to DOM after 4s timeout.`);
+          throw new Error(`Cannot perform "scroll": Element "${selector}" not attached to DOM after 7s timeout.`);
         }
       }
-      await page.evaluate(delta => window.scrollBy(delta.x, delta.y), { x, y });
+      await page.evaluate((delta) => window.scrollBy(delta.x, delta.y), { x, y });
       if (waitForTimeoutMs > 0) {
         await page.waitForTimeout(waitForTimeoutMs);
       }
       return `Scrolled page by x=${x}, y=${y}.`;
     }
 
-    if (action === 'press_key') {
+    if (normalizedAction === 'press_key') {
       if (!key) {
         throw new Error('Key parameter is required for action "press_key".');
       }
-      if (selector) {
-        const locator = page.locator(selector).first();
+      if (effectiveSelector) {
+        const locator = page.locator(effectiveSelector).first();
         try {
-          await locator.waitFor({ state: 'visible', timeout: 4000 });
+          await locator.waitFor({ state: 'visible', timeout });
           await locator.press(key);
           if (waitForTimeoutMs > 0) {
             await page.waitForTimeout(waitForTimeoutMs);
           }
           return `Pressed key "${key}" on element "${selector}".`;
         } catch {
-          throw new Error(`Cannot perform "press_key": Element "${selector}" not visible after 4s timeout.`);
+          throw new Error(`Cannot perform "press_key": Element "${selector}" not visible after 7s timeout.`);
         }
       }
       await page.keyboard.press(key);
@@ -701,23 +726,23 @@ export class BrowserManager {
       return `Pressed key "${key}" on active page.`;
     }
 
-    if (!selector) {
+    if (!effectiveSelector) {
       throw new Error(`Selector is required for action "${action}".`);
     }
 
-    const locator = page.locator(selector).first();
+    const locator = page.locator(effectiveSelector).first();
     try {
-      await locator.waitFor({ state: 'visible', timeout: 4000 });
+      await locator.waitFor({ state: 'visible', timeout });
     } catch {
-      throw new Error(`Cannot perform "${action}": Element with selector "${selector}" not visible after 4s timeout.`);
+      throw new Error(`Cannot perform "${action}": Element with selector "${selector}" not visible after ${timeout / 1000}s timeout.`);
     }
 
-    switch (action) {
+    switch (normalizedAction) {
       case 'click':
         if (waitForNavigation) {
           try {
             await Promise.all([
-              page.waitForNavigation({ timeout: 6000, waitUntil: 'domcontentloaded' }).catch(() => {}),
+              page.waitForNavigation({ timeout: TIMEOUTS.NAVIGATION_DEFAULT_MS, waitUntil: 'domcontentloaded' }).catch(() => {}),
               locator.click()
             ]);
           } catch {
@@ -782,7 +807,7 @@ export class BrowserManager {
   }
 
   public async pickElement(
-    timeoutMs: number = 30000,
+    timeoutMs: number = TIMEOUTS.PICKER_HOTKEY_DEFAULT_MS,
     includeScreenshot: boolean = true,
     includeStyles: boolean = true
   ): Promise<PickedElementInfo> {
@@ -1065,7 +1090,8 @@ export class BrowserManager {
 
     // Extract token-lean semantic DOM tree for the picked element
     try {
-      result.domTree = await extractCompressedDom(page, { selector: rawResult.selector, includeOffscreen: true });
+      const escapedSelector = rawResult.selector ? escapeTailwindSelector(rawResult.selector) : rawResult.selector;
+      result.domTree = await extractCompressedDom(page, { selector: escapedSelector, includeOffscreen: true });
     } catch (err: any) {
       logger.warn('picker_dom_compression_fallback', { selector: rawResult.selector, error: err.message });
     }
@@ -1073,12 +1099,17 @@ export class BrowserManager {
     // Capture precise screenshot of the picked section
     if (includeScreenshot) {
       try {
-        const locator = page.locator(rawResult.selector).first();
+        const escapedSelector = rawResult.selector ? escapeTailwindSelector(rawResult.selector) : rawResult.selector;
+        const locator = page.locator(escapedSelector).first();
         const screenshotBuf = await locator.screenshot();
         result.screenshotBase64 = screenshotBuf.toString('base64');
       } catch (err: any) {
         logger.warn('picker_screenshot_fallback', { selector: rawResult.selector, error: err.message });
       }
+    }
+
+    if (result.status === 'selected') {
+      this.lastPickedElement = result;
     }
 
     return result;
@@ -1227,14 +1258,16 @@ export class BrowserManager {
 
         // Extract token-lean semantic DOM tree for the picked element
         try {
-          picked.domTree = await extractCompressedDom(page, { selector: data.selector, includeOffscreen: true });
+          const escapedSelector = data.selector ? escapeTailwindSelector(data.selector) : data.selector;
+          picked.domTree = await extractCompressedDom(page, { selector: escapedSelector, includeOffscreen: true });
         } catch (err: any) {
           logger.warn('hotkey_picker_dom_compression_failed', { selector: data.selector, error: err.message });
         }
 
         // Capture screenshot of the picked section
         try {
-          const locator = page.locator(data.selector).first();
+          const escapedSelector = data.selector ? escapeTailwindSelector(data.selector) : data.selector;
+          const locator = page.locator(escapedSelector).first();
           const screenshotBuf = await locator.screenshot();
           picked.screenshotBase64 = screenshotBuf.toString('base64');
         } catch (err: any) {
@@ -1465,13 +1498,16 @@ export class BrowserManager {
 
   public async diffDom(rootSelector?: string, resetBaseline: boolean = false): Promise<DomDiffResult> {
     const page = await this.ensurePage();
-    const current = await captureDomSnapshot(page, rootSelector);
+    const effectiveSelector = rootSelector ? escapeTailwindSelector(rootSelector) : rootSelector;
+    const current = await captureDomSnapshot(page, effectiveSelector);
 
     if (resetBaseline || !this.lastDomSnapshot) {
       this.lastDomSnapshot = current;
       return {
         status: 'baseline_set',
         currentTimestamp: current.timestamp,
+        baselineUrl: current.url,
+        currentUrl: current.url,
         summary: {
           addedCount: 0,
           removedCount: 0,
@@ -1492,11 +1528,6 @@ export class BrowserManager {
 
   public async disconnect(): Promise<void> {
     if (this.browser) {
-      try {
-        await this.browser.close();
-      } catch {
-        // Ignore disconnect errors
-      }
       this.browser = null;
       this.context = null;
       this.page = null;

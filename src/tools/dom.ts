@@ -13,18 +13,25 @@ export function registerDomTool(server: McpServer): void {
     includeBoundingBox: z
       .boolean()
       .optional()
+      .default(true)
       .describe('Include pixel bounding box coordinates [box=x,y,w,h] (default: true)'),
     includeOffscreen: z
       .boolean()
       .optional()
-      .describe('Include elements outside the active viewport (sliders, carousels, off-screen drawers) or animated fade-in elements (default: false)')
+      .default(false)
+      .describe('Include elements outside the active viewport (sliders, carousels, off-screen drawers) or animated fade-in elements (default: false)'),
+    maxDepth: z
+      .number()
+      .optional()
+      .default(8)
+      .describe('Maximum hierarchy traversal depth for DOM compression (default: 8)')
   };
 
   const domHandler = instrumentHandler(
     'spector_get_dom_tree',
-    async ({ selector, includeBoundingBox, includeOffscreen }: any) => {
+    async ({ selector, includeBoundingBox, includeOffscreen, maxDepth }: any) => {
       const manager = BrowserManager.getInstance();
-      const domTree = await manager.getDomTree(selector, includeBoundingBox ?? true, includeOffscreen ?? false);
+      const domTree = await manager.getDomTree(selector, includeBoundingBox ?? true, includeOffscreen ?? false, maxDepth ?? 8);
 
       return textResponse(domTree);
     }

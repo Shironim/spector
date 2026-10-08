@@ -19,18 +19,22 @@ export function registerConsoleTool(server: McpServer): void {
     level: z
       .enum(['all', 'error', 'warn'])
       .optional()
+      .default('error')
       .describe('Log severity filter (default: "error")'),
     limit: z
       .number()
       .optional()
+      .default(50)
       .describe('Maximum recent log entries to return (default: 50)'),
     format: z
       .enum(['compact', 'verbose'])
       .optional()
+      .default('compact')
       .describe('Output format: "compact" (token-lean 1 line per log) or "verbose" (full JSON) (default: "compact")'),
     clearAfterRead: z
       .boolean()
       .optional()
+      .default(true)
       .describe('Clear log buffer after reading (default: true)')
   };
 

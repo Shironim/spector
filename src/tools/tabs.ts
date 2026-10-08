@@ -50,7 +50,8 @@ export function registerTabsTools(server: McpServer): void {
           title: result.title,
           url: result.url,
           viewport: result.viewport
-        }
+        },
+        ...(result.warning ? { warning: result.warning } : {})
       });
     }
   );

@@ -59,14 +59,17 @@ export function registerPickerTool(server: McpServer): void {
     timeoutMs: z
       .number()
       .optional()
+      .default(30000)
       .describe('Timeout in milliseconds waiting for developer to click an element (default: 30000 / 30 seconds)'),
     includeScreenshot: z
       .boolean()
       .optional()
+      .default(true)
       .describe('Automatically capture a cropped screenshot of the selected element/section (default: true)'),
     includeStyles: z
       .boolean()
       .optional()
+      .default(true)
       .describe('Extract computed CSS design tokens such as flex/grid layout, colors, typography, border-radius, spacing (default: true)')
   };
 
@@ -134,6 +137,7 @@ export function registerPickerTool(server: McpServer): void {
     clearAfterRead: z
       .boolean()
       .optional()
+      .default(false)
       .describe('Clear the last picked element cache after reading (default: false)')
   };
 

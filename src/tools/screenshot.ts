@@ -13,6 +13,7 @@ export function registerScreenshotTool(server: McpServer): void {
     fullPage: z
       .boolean()
       .optional()
+      .default(false)
       .describe('Capture entire scrollable page height (default: false)')
   };
 

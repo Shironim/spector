@@ -48,6 +48,7 @@ export interface ActiveTabInfo {
     width: number;
     height: number;
   } | null;
+  warning?: string;
 }
 
 export interface TabInfo {
@@ -133,6 +134,17 @@ export function jsonResponse(data: unknown, isError = false): McpToolResponse {
     content: [{ type: 'text', text: JSON.stringify(data, null, 2) }],
     ...(isError ? { isError: true } : {})
   };
+}
+
+export function envelopeResponse(success: boolean, message: string, data?: unknown, isError = false): McpToolResponse {
+  const payload: Record<string, unknown> = {
+    success,
+    message
+  };
+  if (data !== undefined) {
+    payload.data = data;
+  }
+  return jsonResponse(payload, isError);
 }
 
 

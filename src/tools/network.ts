@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { BrowserManager } from '../browser-manager.js';
-import { textResponse } from '../types.js';
+import { textResponse, envelopeResponse } from '../types.js';
 import { instrumentHandler } from '../utils/tool-instrument.js';
 
 function formatCompactNetworkLogs(logs: any[]): string {
@@ -29,24 +29,29 @@ export function registerNetworkTool(server: McpServer): void {
       .optional()
       .describe('Filter string or regex pattern for URLs (e.g. "/api/", "users", "graphql")'),
     statusFilter: z
-      .enum(['all', 'errors_only', '4xx', '5xx'])
+      .enum(['all', 'errors_only', 'errorsOnly', '4xx', '5xx'])
       .optional()
-      .describe('Filter by HTTP status: "all", "errors_only" (>= 400 or network failure), "4xx", "5xx" (default: "all")'),
+      .default('all')
+      .describe('Filter by HTTP status: "all", "errors_only" / "errorsOnly" (>= 400 or network failure), "4xx", "5xx" (default: "all")'),
     includeStaticAssets: z
       .boolean()
       .optional()
+      .default(false)
       .describe('Include static assets such as CSS, fonts, images, media (default: false, only fetch/xhr/document to prevent context rot)'),
     limit: z
       .number()
       .optional()
+      .default(25)
       .describe('Maximum number of recent log entries to return (default: 25)'),
     format: z
       .enum(['compact', 'verbose'])
       .optional()
+      .default('compact')
       .describe('Output format: "compact" (token-lean 1 line per request) or "verbose" (full JSON) (default: "compact")'),
     clearAfterRead: z
       .boolean()
       .optional()
+      .default(true)
       .describe('Clear log buffer after reading so subsequent calls only return new logs (default: true)')
   };
 
@@ -95,6 +100,7 @@ export function registerNetworkTool(server: McpServer): void {
     status: z
       .number()
       .optional()
+      .default(200)
       .describe('Simulated HTTP status code (default: 200, or 400, 422, 500 for error testing)'),
     body: z
       .string()
@@ -103,7 +109,12 @@ export function registerNetworkTool(server: McpServer): void {
     contentType: z
       .string()
       .optional()
+      .default('application/json')
       .describe('Response content-type header (default: "application/json")'),
+    headers: z
+      .record(z.string(), z.string())
+      .optional()
+      .describe('Optional custom HTTP response headers map (e.g. {"X-Custom": "val"})'),
     delayMs: z
       .number()
       .optional()
@@ -112,7 +123,7 @@ export function registerNetworkTool(server: McpServer): void {
 
   const mockHandler = instrumentHandler(
     'spector_mock_network',
-    async ({ action, urlPattern, status, body, contentType, delayMs }: any) => {
+    async ({ action, urlPattern, status, body, contentType, headers, delayMs }: any) => {
       const manager = BrowserManager.getInstance();
 
       if (action === 'set') {
@@ -124,25 +135,28 @@ export function registerNetworkTool(server: McpServer): void {
           status,
           body,
           contentType,
+          headers,
           delayMs
         });
-        return textResponse(`[MOCK ACTIVE] Route "${rule.urlPattern}" successfully intercepted -> Status: ${rule.status}, Type: ${rule.contentType}`);
+        return envelopeResponse(true, `Route "${rule.urlPattern}" successfully intercepted -> Status: ${rule.status}, Type: ${rule.contentType}`, { rule });
       }
 
       if (action === 'clear') {
         const res = await manager.clearNetworkMock(urlPattern);
-        return textResponse(`[MOCKS CLEARED] Cleared ${res.clearedCount} mock rule(s). Active remaining: ${res.remaining.length > 0 ? res.remaining.join(', ') : 'none'}`);
+        return envelopeResponse(true, `Cleared ${res.clearedCount} mock rule(s).`, {
+          clearedCount: res.clearedCount,
+          remaining: res.remaining
+        });
       }
 
       if (action === 'list') {
         const activeRules = manager.listNetworkMocks();
         if (activeRules.length === 0) {
-          return textResponse('No active network mock rules.');
+          return envelopeResponse(true, 'No active network mock rules.', { activeRules: [] });
         }
-        const summary = activeRules
-          .map(r => `• [${r.status}] ${r.urlPattern} (${r.contentType || 'application/json'}${r.delayMs ? `, delay: ${r.delayMs}ms` : ''})`)
-          .join('\n');
-        return textResponse(`[ACTIVE NETWORK MOCKS: ${activeRules.length}]\n${summary}`);
+        return envelopeResponse(true, `Active network mock rules: ${activeRules.length}`, {
+          activeRules
+        });
       }
 
       throw new Error(`Unknown action: "${action}". Must be "set", "clear", or "list".`);

@@ -9,14 +9,17 @@ export function registerAttachTool(server: McpServer): void {
     cdpUrl: z
       .string()
       .optional()
+      .default('http://localhost:9222')
       .describe('Chrome remote debugging endpoint (default: "http://localhost:9222")'),
     autoSelectActiveTab: z
       .boolean()
       .optional()
+      .default(true)
       .describe("Automatically attach to the developer's most recent active tab (default: true)"),
     autoLaunch: z
       .boolean()
       .optional()
+      .default(true)
       .describe('Automatically launch Chrome with remote debugging port enabled if not already running (default: true)')
   };
 
