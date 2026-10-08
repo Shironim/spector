@@ -23,6 +23,9 @@ export interface DomDiffResult {
   status: 'compared' | 'baseline_set';
   baselineTimestamp?: string;
   currentTimestamp: string;
+  baselineUrl?: string;
+  currentUrl?: string;
+  urlMismatchWarning?: string;
   summary: {
     addedCount: number;
     removedCount: number;
@@ -74,23 +77,87 @@ export async function captureDomSnapshot(page: Page, rootSelector?: string): Pro
       }
 
       function getCssSelector(el: Element): string {
-        if (el.id) return `#${CSS.escape(el.id)}`;
+        if (el.id) {
+          try {
+            if (document.querySelectorAll(`#${CSS.escape(el.id)}`).length === 1) {
+              return `#${CSS.escape(el.id)}`;
+            }
+          } catch {
+            return `#${CSS.escape(el.id)}`;
+          }
+        }
+
+        const MAX_ARIA_LABEL_LEN = 30;
         const path: string[] = [];
         let curr: Element | null = el;
+
         while (curr && curr.nodeType === Node.ELEMENT_NODE && curr !== document.body && curr !== document.documentElement) {
           const tag = curr.tagName.toLowerCase();
           if (curr.id) {
-            path.unshift(`#${CSS.escape(curr.id)}`);
-            break;
+            const idSel = `#${CSS.escape(curr.id)}`;
+            try {
+              if (document.querySelectorAll(idSel).length === 1) {
+                path.unshift(idSel);
+                break;
+              }
+            } catch {
+              path.unshift(idSel);
+              break;
+            }
           }
+
+          const testId = curr.getAttribute('data-testid') || curr.getAttribute('data-test') || curr.getAttribute('data-cy');
+          if (testId) {
+            const attr = curr.hasAttribute('data-testid') ? 'data-testid' : (curr.hasAttribute('data-test') ? 'data-test' : 'data-cy');
+            const testIdSelector = `[${attr}="${CSS.escape(testId)}"]`;
+            try {
+              if (document.querySelectorAll(testIdSelector).length === 1) {
+                path.unshift(testIdSelector);
+                break;
+              }
+            } catch {
+              // fallback to contextual traversal
+            }
+          }
+
           const parent: Element | null = curr.parentElement;
           if (!parent) break;
+
+          let selectorPart = tag;
+          if (testId) {
+            const attr = curr.hasAttribute('data-testid') ? 'data-testid' : (curr.hasAttribute('data-test') ? 'data-test' : 'data-cy');
+            selectorPart += `[${attr}="${CSS.escape(testId)}"]`;
+          } else {
+            const nameAttr = curr.getAttribute('name');
+            const ariaLabel = curr.getAttribute('aria-label');
+            const roleAttr = curr.getAttribute('role');
+
+            if (nameAttr) {
+              selectorPart += `[name="${CSS.escape(nameAttr)}"]`;
+            } else if (ariaLabel && ariaLabel.length <= MAX_ARIA_LABEL_LEN) {
+              selectorPart += `[aria-label="${CSS.escape(ariaLabel)}"]`;
+            } else if (roleAttr) {
+              selectorPart += `[role="${CSS.escape(roleAttr)}"]`;
+            }
+          }
+
           const siblings = Array.from(parent.children).filter(c => c.tagName.toLowerCase() === tag);
           if (siblings.length > 1) {
-            const index = siblings.indexOf(curr) + 1;
-            path.unshift(`${tag}:nth-of-type(${index})`);
+            const matches = Array.from(parent.children).filter(c => {
+              try {
+                return c.matches(selectorPart);
+              } catch {
+                return false;
+              }
+            });
+            if (matches.length === 1) {
+              path.unshift(selectorPart);
+            } else {
+              const index = siblings.indexOf(curr) + 1;
+              path.unshift(`${selectorPart}:nth-of-type(${index})`);
+            }
           } else {
-            path.unshift(tag);
+            path.unshift(selectorPart);
           }
           curr = parent;
         }
@@ -231,10 +298,17 @@ export function compareDomSnapshots(baseline: DomSnapshotData, current: DomSnaps
     }
   }
 
+  const urlMismatchWarning = (baseline.url && current.url && baseline.url !== current.url)
+    ? `Baseline was captured on URL: "${baseline.url}", but current snapshot is on URL: "${current.url}". Differences may reflect full-page navigation instead of incremental DOM mutation. Consider resetting baseline.`
+    : undefined;
+
   return {
     status: 'compared',
     baselineTimestamp: baseline.timestamp,
     currentTimestamp: current.timestamp,
+    baselineUrl: baseline.url,
+    currentUrl: current.url,
+    ...(urlMismatchWarning ? { urlMismatchWarning } : {}),
     summary: {
       addedCount: added.length,
       removedCount: removed.length,

@@ -135,7 +135,7 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
         // Determine if node is semantic or interesting to display
         const isInteractive = ['a', 'button', 'input', 'select', 'textarea', 'dialog', 'summary'].includes(tag) || !!role;
         const isHeading = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag);
-        const hasContent = directText.length > 0 || ariaLabel.length > 0 || !!id;
+        const hasContent = directText.length > 0 || ariaLabel.length > 0 || !!id || !!(comp && comp.componentName);
         const children = Array.from(el.children);
 
         // Compress generic wrapper divs/spans that have no text and only 1 child
@@ -150,7 +150,7 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
           } else if (placeholder) {
             locHint = ` loc="[placeholder='${placeholder}']"`;
           } else if (directText && directText.length <= 30) {
-            locHint = ` loc="text='${directText.replace(/"/g, '')}'"`;
+            locHint = ` loc="text='${directText.replace(/'/g, "\\'")}'"`;
           } else if (tag === 'a' && hrefAttr) {
             locHint = ` loc="a[href='${hrefAttr}']"`;
           }
