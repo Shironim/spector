@@ -1,6 +1,6 @@
 {
   "name": "@dimassetoid/spector",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "Standalone Browser Sharing & Visual Element Inspector MCP Server",
   "type": "module",
   "main": "dist/index.js",
@@ -40,7 +40,10 @@
   "scripts": {
     "build": "bun build ./src/index.ts --outdir ./dist --target node --external playwright-core --external @modelcontextprotocol/sdk --external zod",
     "build:tsc": "tsc",
-    "prepack": "npm run build",
+    "test": "bun test tests/unit",
+    "test:live": "bun tests/live/live-verification.mjs",
+    "prepack": "npm run build && npm test",
+    "prepublishOnly": "npm run build && npm test",
     "start": "node dist/index.js"
   },
   "dependencies": {

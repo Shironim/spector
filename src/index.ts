@@ -31,13 +31,13 @@ async function main() {
   }
 
   if (args.includes('--version') || args.includes('-v')) {
-    console.log('1.0.3');
+    console.log('1.0.4');
     process.exit(0);
   }
 
   const server = new McpServer({
     name: 'spector',
-    version: '1.0.3'
+    version: '1.0.4'
   });
 
   // Register all modular tools
@@ -56,7 +56,7 @@ async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 
-  logger.info('spector_started', { version: '1.0.3', transport: 'stdio' });
+  logger.info('spector_started', { version: '1.0.4', transport: 'stdio' });
 
   // Eager non-blocking attach to dedicated dev window if already running on port 9222
   BrowserManager.getInstance()

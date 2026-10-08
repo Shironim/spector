@@ -84,16 +84,16 @@ Add Spector to your MCP client configuration (`claude_desktop_config.json`, `.cu
 | `spector_get_last_picked` | `clearAfterRead?` | Retrieves element captured via `Alt + P` (selector, component, physical source path, styles, screenshot). |
 | `spector_pick_element` | `timeoutMs?`, `includeScreenshot?`, `includeStyles?` | Proactively triggers in-browser inspector banner, awaits click, and resolves component source. |
 | `spector_diff_dom` | `selector?`, `resetBaseline?` | Verifies post-action UI changes by returning delta mutations against baseline. |
-| `spector_get_dom_tree` | `selector?`, `includeBoundingBox?`, `includeOffscreen?` | Returns token-lean compressed accessibility tree with bounding boxes. |
-| `spector_get_network_logs` | `filter?`, `statusFilter?`, `format?`, `limit?`, `includeStaticAssets?` | Returns telemetry of dynamic requests (compact 1-line by default; static assets dropped; credentials scrubbed). |
-| `spector_mock_network` | `action`, `urlPattern?`, `status?`, `body?`, `contentType?`, `delayMs?` | Ephemeral route mocking and network latency/status simulation. |
+| `spector_get_dom_tree` | `selector?`, `includeBoundingBox?`, `includeOffscreen?`, `maxDepth?` | Returns token-lean compressed accessibility tree with bounding boxes and customizable depth. |
+| `spector_get_network_logs` | `filter?`, `statusFilter?`, `format?`, `limit?`, `includeStaticAssets?`, `clearAfterRead?` | Returns telemetry of dynamic requests (supports "errors_only" / "errorsOnly", static assets dropped, credentials scrubbed). |
+| `spector_mock_network` | `action`, `urlPattern?`, `status?`, `body?`, `contentType?`, `headers?`, `delayMs?` | Ephemeral route mocking and network latency/status simulation with custom response headers. |
 | `spector_get_console_logs` | `level?`, `format?`, `limit?`, `clearAfterRead?` | Returns console errors and exceptions with run-length deduplication. |
 | `spector_list_tabs` | — | Lists open tabs with indices, titles, URLs, and active status. |
 | `spector_select_tab` | `index?`, `url?`, `urlPattern?`, `title?`, `debugSessionId?` | Switches active tab via index, URL substring, regex pattern, or session ID. |
-| `spector_interact` | `action`, `selector?`, `text?`, `key?`, `scrollDelta?`, `scrollX?`, `scrollY?`, `waitForTimeoutMs?` | Dispatches `click`, `fill`, `type`, `hover`, `scroll`, `scrollIntoView`, or `press_key`. |
+| `spector_interact` | `action`, `selector?`, `text?`, `key?`, `clearFirst?`, `scrollDelta?`, `scrollX?`, `scrollY?`, `waitForNavigation?`, `waitForTimeoutMs?`, `delayMs?` | Dispatches simulated user events (`click`, `fill`, `type`, `hover`, `scroll`, `scrollIntoView`, `press_key`/`pressKey`). |
 | `spector_navigate` | `url`, `waitUntil?` | Navigates active tab or reloads current page. |
 | `spector_capture_screenshot` | `fullPage?`, `selector?` | Captures viewport or element screenshot (PNG Base64). |
-| `spector_attach` | `cdpUrl?`, `autoLaunch?` | Attaches to physical Chrome CDP instance on port 9222. |
+| `spector_attach` | `cdpUrl?`, `autoSelectActiveTab?`, `autoLaunch?` | Attaches to physical Chrome CDP instance on port 9222. |
 
 ---
 
