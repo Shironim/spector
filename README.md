@@ -1,118 +1,103 @@
 # spector
- 
+
 [![npm version](https://img.shields.io/npm/v/@dimassetoid/spector.svg?style=flat-square)](https://www.npmjs.com/package/@dimassetoid/spector)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg?style=flat-square)](https://modelcontextprotocol.io)
 
-Model Context Protocol (MCP) server that connects AI coding assistants directly to your physical Google Chrome session via Chrome DevTools Protocol (CDP). Designed as a selective perceptual transducer that eliminates context rot and token bloat through token-lean DOM trees, in-browser visual inspection (`Alt + P`), automated **Pick-to-Source** code navigation, semantic DOM diffing, and noise-filtered telemetry.
+**Spector 1.1.0** is a **Perceptual Design, Motion & CSS Forensics Compiler** over the Model Context Protocol (MCP). It connects AI coding agents directly to your physical Google Chrome session via Chrome DevTools Protocol (CDP), replacing pixel-guessing and DOM dumping with Design Blueprints, `:hover`/`:focus-visible` pseudo-state deltas, WAAPI/CSS animation forensics, cross-tab A/B comparisons, Design DNA + token/Tailwind mapping, and unified layout/cascade/inactive-CSS forensics.
 
 ---
 
 ## Core Capabilities
 
-- **Session Preservation (CDP Attach):** Reuses your physical Chrome session (`http://localhost:9222`). Authenticated cookies, session storage, CSRF tokens, and local dev domains (`localhost`, Docker, Laravel Herd `.test`) work out-of-the-box. Never prompts for re-login.
-- **Pick-to-Source Physical Grounding:** Hit `Alt + P` on any tab or call `spector_pick_element`. Spector traces the framework component (Vue, React Fiber, Svelte, Angular, Inertia, Blade, Alpine, Livewire), un-mangles Vite/Webpack dev-server URLs, and resolves the exact physical file on disk (`file:///path/to/Component.vue#L24`) complete with a 5-line code snippet preview with pointer (`>`).
-- **Semantic DOM Diffing (`spector_diff_dom`):** Compares live DOM against a recorded baseline to verify post-mutation UI changes with minimal tokens, preventing massive whole-DOM context dumps.
-- **Token-Lean DOM (`spector_get_dom_tree`):** Generates compressed accessibility trees with bounding boxes `[box=x,y,w,h]` and component tags `[comp=CheckoutButton]`, reducing context tokens by up to 95% compared to raw HTML.
-- **Anti-Context Rot Telemetry & Security:**
-  - **Network:** Auto-drops static assets (`image`, `font`, `css`), redacts sensitive credentials and authorization tokens, and returns compact 1-line dynamic request summaries (`format: "compact"`).
-  - **Console:** Automatic run-length deduplication (`(xN)`) and default `error` severity filtering.
-  - **Stdio Integrity:** All server diagnostics and timing logs write strictly to `stderr`, completely eliminating JSON-RPC communication corruption on `stdout`.
-- **Advanced Interaction & Multi-Tab Routing:** Dispatches `scrollIntoView`, `click`, `fill`, `hover`, and keyboard input with post-settling delays (`waitForTimeoutMs`). Select tabs via regex patterns (`urlPattern`), page title, or multi-tool correlation session IDs (`debugSessionId`).
+- **Session-Preserving CDP Attach:** Connects to local Chrome (`localhost`, `127.0.0.1`, `::1`), preserving cookies, auth sessions, CSRF tokens, and `.test`/Docker domains without closing your browser on disconnect.
+- **Unified Design Blueprint Picker (`Alt + P` & `spector_picker`):** Captures typography, layout, surface styles, subtree summaries, `<svg>`/`<img>` metadata, framework component hints, `:hover`/`:focus-visible` CDP deltas, and cross-tab Target A vs Reference B diffs.
+- **Unified UI Forensics (`spector_diagnose`):** Pinpoints horizontal overflow culprits, clipping/z-index traps, broken media/fonts, CDP CSS cascade overrides (`@layer` & specificity), and deduplicated console/network errors.
+- **Global Design DNA (`spector_extract_tokens`):** Distills `:root` CSS variables, color palettes, typography scales, radii, shadows, and container widths from any reference page.
+- **Token-Lean DOM & Multi-Breakpoint Audits:** Extracts compressed semantic DOM trees (`spector_get_dom_tree`) with password masking, captures `mobile`/`tablet`/`desktop` screenshots (`spector_capture_screenshot`), dispatches UI interactions (`spector_interact`), and previews ephemeral CSS (`spector_preview_css`).
 
 ---
 
 ## Quick Start
 
-### 1. Install or Run via npx
-```bash
-# Run directly via npx (recommended)
-npx -y @dimassetoid/spector
+### 1. Install & Initialize
 
-# Or install globally
+Install globally via npm (or download a prebuilt binary from [GitHub Releases](https://github.com/Shironim/spector/releases)):
+
+```bash
 npm i -g @dimassetoid/spector
+spector init
 ```
 
-### 2. Initialize Project Skill (Optional but Recommended)
-Run `spector init` inside your project root to automatically generate the agent skill file (`.agents/skills/spector-inspect/SKILL.md` or `.cursor/skills/`):
+### 2. Configure Your MCP Client
 
-```bash
-npx @dimassetoid/spector init
-```
-
-### 3. Configure MCP Client
 Add Spector to your MCP client configuration (`claude_desktop_config.json`, `.cursor/mcp.json`, Antigravity, or OpenCode):
 
 ```json
 {
   "mcpServers": {
     "spector": {
-      "command": "npx",
-      "args": ["-y", "@dimassetoid/spector"]
+      "command": "spector",
+      "args": ["serve"]
     }
   }
 }
 ```
 
-> **Tip:** Start Google Chrome with remote debugging enabled:
-> ```bash
-> chrome --remote-debugging-port=9222
-> ```
-> *If Chrome is not running when an MCP tool is called, Spector will automatically launch Chrome with remote debugging enabled for you.*
+By default, `spector serve` runs in **`forensics` profile** (exposing the 7 core UI/CSS/motion forensics tools to keep agent context lean when paired with browser automation tools like **`agent-browser`**). If you want Spector stand-alone with all 10 tools (`spector_navigate`, `spector_get_dom_tree`, `spector_interact`), pass `--profile full` (or `SPECTOR_PROFILE=full`):
+
+```json
+{
+  "mcpServers": {
+    "spector": {
+      "command": "spector",
+      "args": ["serve", "--profile", "full"]
+    }
+  }
+}
+```
+
+To share the same Chrome instance between `agent-browser` and Spector, either connect `agent-browser` via `--cdp 9222` / `--auto-connect`, or pass the `ws://127.0.0.1:...` URL from `agent-browser get cdp-url` to `spector_attach`. Use `spector_tabs({ latest: true })` to sync to a newly opened tab.
+
+Spector communicates over `stdin`/`stdout` (internal logs go to `stderr`). When Chrome is not already running with `--remote-debugging-port=9222`, browser tools can attach or auto-launch a dedicated dev profile on demand.
 
 ---
 
-## The `Alt + P` (Pick-to-Source) Workflow
+## Tools Reference (10 Tools)
 
-1. **Trigger:** Press `Alt + P` inside any active browser tab.
-2. **Select:** Click any component to highlight and capture it.
-3. **Inspect & Ground:** AI calls `spector_get_last_picked` to receive:
-   - Precise CSS selector (e.g. `#checkout > div > form > button`)
-   - Framework component name & verified physical disk URI (`file:///.../Button.vue#L10`)
-   - 5-line source code snippet around the component declaration
-   - Bounding rect (`x`, `y`, `width`, `height`)
-   - Computed styles (layout, typography, margins, padding, colors)
-   - High-resolution cropped screenshot (Base64 PNG)
-   - Scoped semantic DOM sub-tree
-
----
-
-## Tools Reference
-
-| Tool | Key Parameters | Action / Output |
-| :--- | :--- | :--- |
-| `spector_get_last_picked` | `clearAfterRead?` | Retrieves element captured via `Alt + P` (selector, component, physical source path, styles, screenshot). |
-| `spector_pick_element` | `timeoutMs?`, `includeScreenshot?`, `includeStyles?` | Proactively triggers in-browser inspector banner, awaits click, and resolves component source. |
-| `spector_diff_dom` | `selector?`, `resetBaseline?` | Verifies post-action UI changes by returning delta mutations against baseline. |
-| `spector_get_dom_tree` | `selector?`, `includeBoundingBox?`, `includeOffscreen?`, `maxDepth?` | Returns token-lean compressed accessibility tree with bounding boxes and customizable depth. |
-| `spector_get_network_logs` | `filter?`, `statusFilter?`, `format?`, `limit?`, `includeStaticAssets?`, `clearAfterRead?` | Returns telemetry of dynamic requests (supports "errors_only" / "errorsOnly", static assets dropped, credentials scrubbed). |
-| `spector_mock_network` | `action`, `urlPattern?`, `status?`, `body?`, `contentType?`, `headers?`, `delayMs?` | Ephemeral route mocking and network latency/status simulation with custom response headers. |
-| `spector_get_console_logs` | `level?`, `format?`, `limit?`, `clearAfterRead?` | Returns console errors and exceptions with run-length deduplication. |
-| `spector_list_tabs` | — | Lists open tabs with indices, titles, URLs, and active status. |
-| `spector_select_tab` | `index?`, `url?`, `urlPattern?`, `title?`, `debugSessionId?` | Switches active tab via index, URL substring, regex pattern, or session ID. |
-| `spector_interact` | `action`, `selector?`, `text?`, `key?`, `clearFirst?`, `scrollDelta?`, `scrollX?`, `scrollY?`, `waitForNavigation?`, `waitForTimeoutMs?`, `delayMs?` | Dispatches simulated user events (`click`, `fill`, `type`, `hover`, `scroll`, `scrollIntoView`, `press_key`/`pressKey`). |
-| `spector_navigate` | `url`, `waitUntil?` | Navigates active tab or reloads current page. |
-| `spector_capture_screenshot` | `fullPage?`, `selector?` | Captures viewport or element screenshot (PNG Base64). |
-| `spector_attach` | `cdpUrl?`, `autoSelectActiveTab?`, `autoLaunch?` | Attaches to physical Chrome CDP instance on port 9222. |
+| Tool | Purpose |
+| :--- | :--- |
+| `spector_attach` | Connects to local Chrome CDP endpoint (auto-launches if enabled). |
+| `spector_tabs` | Lists open tabs (`action: "list"`) or switches active tab (`action: "select"`). |
+| `spector_navigate` | Navigates the active tab to a URL or reloads (`"reload"`). |
+| `spector_picker` | Retrieves `Alt+P` Blueprints/A-B diffs (`"get"`), opens overlay (`"pick"`), or clears queue (`"clear"`). |
+| `spector_get_dom_tree` | Returns a token-lean semantic DOM tree with Tailwind classes and password masking. |
+| `spector_capture_screenshot` | Captures element, page, or `mobile`/`tablet`/`desktop` PNG screenshots and restores viewport. |
+| `spector_diagnose` | Runs layout forensics, CDP CSS cascade explanation, breakpoint overflow audit, and runtime logs. |
+| `spector_extract_tokens` | Extracts `:root` CSS variables, palette, typography scale, radii, shadows, and container widths. |
+| `spector_interact` | Dispatches `click`, `hover`, `scroll`, `scrollIntoView`, `fill`, `pressKey`, and `selectOption`. |
+| `spector_preview_css` | Injects, appends, reads, or clears ephemeral `<style id="spector-live-preview">` overrides. |
 
 ---
 
-## Development & Build
+## Documentation
+
+Detailed tool contracts, engine invariants, concurrency/queue semantics, activity indicator behavior, and resource budgets are maintained in **[`docs/feature/README.md`](docs/feature/README.md)**.
+
+---
+
+## Development
 
 ```bash
-# Install dependencies
 bun install
-
-# Build distribution bundle
+bun test tests/unit
+bunx --no-install tsc --noEmit
 bun run build
-
-# Type check
-npm run build:tsc -- --noEmit
+bun run test:regressions   # Requires local Chrome (or SPECTOR_TEST_CHROME)
 ```
 
 ---
 
 ## License
 
-MIT © [Dimas Seto](https://github.com/dimasseto)
-
+MIT © [Shironim/spector](https://github.com/Shironim/spector)
