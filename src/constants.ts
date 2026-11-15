@@ -1,6 +1,4 @@
-/**
- * Spector Centralized Engine Constants
- */
+export const SPECTOR_VERSION = '1.0.4';
 
 export const TIMEOUTS = {
   CDP_CONNECT_MS: 10000,
@@ -9,25 +7,42 @@ export const TIMEOUTS = {
   SCREENSHOT_DEFAULT_MS: 4000,
   PICKER_HOTKEY_DEFAULT_MS: 30000,
   NAVIGATION_DEFAULT_MS: 15000,
-  SETTLING_DELAY_MS: 300
+  SETTLING_DELAY_MS: 300,
+  OPERATION_DEFAULT_MS: 30000
 } as const;
 
 export const TELEMETRY_LIMITS = {
   CONSOLE_LOG_DEFAULT_LIMIT: 50,
   NETWORK_LOG_DEFAULT_LIMIT: 25,
   ARG_STRING_TRUNCATE_LEN: 200,
-  DOM_TREE_MAX_DEPTH: 8
+  DOM_TREE_MAX_DEPTH: 8,
+  MAX_LOG_BUFFER: 100,
+  MAX_CONSOLE_TEXT_CHARS: 8000
 } as const;
 
-export const EXTENSION_CANDIDATES = ['.vue', '.tsx', '.jsx', '.svelte', '.blade.php', '.ts', '.js'] as const;
-
-export const SNIPPET_LIMITS = {
-  MAX_FILE_SIZE_BYTES: 200_000,
-  CONTEXT_LINES_BEFORE: 3,
-  CONTEXT_LINES_AFTER: 2
+export const TOKEN_BUDGETS = {
+  MAX_CLASSES_PER_NODE: 20,
+  MAX_CLASS_CHARS_PER_NODE: 220,
+  MAX_INLINE_SVG_BYTES: 2048,
+  MAX_PIN_QUEUE: 10,
+  MAX_SUBTREE_ELEMENTS: 150,
+  MAX_DIAGNOSE_ISSUES: 15,
+  MAX_CSS_VARIABLES: 50,
+  MAX_TOKEN_SCAN_ELEMENTS: 300,
+  MAX_PATHNAME_LEN: 200,
+  MAX_DOM_NODES: 1000,
+  MAX_DOM_CHARS: 64000,
+  MAX_RESPONSE_BYTES: 12 * 1024 * 1024,
+  MAX_SCREENSHOT_BYTES: 6 * 1024 * 1024,
+  MAX_SCREENSHOT_PIXELS: 12000000,
+  MAX_PENDING_OPERATIONS: 16,
+  MAX_BROWSER_PAYLOAD_BYTES: 512 * 1024
 } as const;
 
-export const SELECTOR_LIMITS = {
-  MAX_ARIA_LABEL_LEN: 30
+export const VIEWPORT_PRESETS = {
+  mobile: { width: 375, height: 812, deviceScaleFactor: 1, mobile: true },
+  tablet: { width: 768, height: 1024, deviceScaleFactor: 1, mobile: false },
+  desktop: { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false }
 } as const;
 
+export type BreakpointPreset = keyof typeof VIEWPORT_PRESETS;

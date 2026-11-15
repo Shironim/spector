@@ -1,58 +1,67 @@
 import { describe, it } from 'bun:test';
 import assert from 'node:assert';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { registerAttachTool } from '../../src/tools/attach.js';
-import { registerTabsTools } from '../../src/tools/tabs.js';
-import { registerPickerTool } from '../../src/tools/picker.js';
-import { registerDomTool } from '../../src/tools/dom.js';
-import { registerDiffTool } from '../../src/tools/diff.js';
-import { registerScreenshotTool } from '../../src/tools/screenshot.js';
-import { registerNetworkTool } from '../../src/tools/network.js';
-import { registerConsoleTool } from '../../src/tools/console.js';
-import { registerInteractTool } from '../../src/tools/interact.js';
-import { registerNavigateTool } from '../../src/tools/navigate.js';
+import { createSpectorServer } from '../../src/index.js';
 
-describe('MCP Tool Registration & Contract Integrity', () => {
-  it('registers all 11 core tools successfully without schema collisions', () => {
-    const server = new McpServer({
-      name: 'spector-test',
-      version: '1.0.4'
-    });
+describe('MCP Tool Registration & Contract Integrity (Spector v2)', () => {
+  it('defaults to the 7 core forensics tools and excludes automation/removed v1 tools', () => {
+    const server = createSpectorServer();
+    const tools = (server as any)._registeredTools;
+    assert.ok(tools, 'server should have registered tools');
 
-    // Register all tools
-    registerAttachTool(server);
-    registerTabsTools(server);
-    registerPickerTool(server);
-    registerDomTool(server);
-    registerDiffTool(server);
-    registerScreenshotTool(server);
-    registerNetworkTool(server);
-    registerConsoleTool(server);
-    registerInteractTool(server);
-    registerNavigateTool(server);
+    const forensicsTools = [
+      'spector_attach',
+      'spector_tabs',
+      'spector_picker',
+      'spector_capture_screenshot',
+      'spector_diagnose',
+      'spector_extract_tokens',
+      'spector_preview_css'
+    ];
 
-    // Verify registered tools on server._registeredTools or similar internal map
+    for (const name of forensicsTools) {
+      assert.ok(tools[name], `Expected forensics tool "${name}" to be registered by default`);
+    }
+
+    for (const omitted of ['spector_navigate', 'spector_get_dom_tree', 'spector_interact']) {
+      assert.strictEqual(tools[omitted], undefined, `Tool "${omitted}" should be omitted in default forensics profile`);
+    }
+
+    const removedToolNames = [
+      'spector_list_tabs',
+      'spector_select_tab',
+      'spector_get_last_picked',
+      'spector_pick_element',
+      'spector_diff_dom',
+      'spector_mock_network',
+      'spector_get_network_logs',
+      'spector_get_console_logs'
+    ];
+
+    for (const name of removedToolNames) {
+      assert.strictEqual(tools[name], undefined, `Removed v1 tool "${name}" should not be registered`);
+    }
+  });
+
+  it('registers all 10 tools when profile is "full"', () => {
+    const server = createSpectorServer(undefined, 'full');
     const tools = (server as any)._registeredTools;
     assert.ok(tools, 'server should have registered tools');
 
     const expectedToolNames = [
       'spector_attach',
-      'spector_list_tabs',
-      'spector_select_tab',
-      'spector_get_last_picked',
-      'spector_pick_element',
+      'spector_tabs',
+      'spector_navigate',
+      'spector_picker',
       'spector_get_dom_tree',
-      'spector_diff_dom',
       'spector_capture_screenshot',
-      'spector_get_network_logs',
-      'spector_mock_network',
-      'spector_get_console_logs',
+      'spector_diagnose',
+      'spector_extract_tokens',
       'spector_interact',
-      'spector_navigate'
+      'spector_preview_css'
     ];
 
     for (const name of expectedToolNames) {
-      assert.ok(tools[name], `Expected tool "${name}" to be registered on McpServer`);
+      assert.ok(tools[name], `Expected full-profile tool "${name}" to be registered on McpServer`);
     }
   });
 });

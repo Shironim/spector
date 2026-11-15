@@ -1,6 +1,6 @@
 import { describe, it } from 'bun:test';
 import assert from 'node:assert';
-import { escapeTailwindSelector } from '../../src/browser-manager.js';
+import { escapeTailwindSelector } from '../../src/utils/selector.js';
 
 describe('Tailwind Selector Escaping (escapeTailwindSelector)', () => {
   it('escapes arbitrary value brackets', () => {

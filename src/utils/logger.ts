@@ -60,12 +60,12 @@ export class TelemetryLogger {
       ...extra
     };
 
-    // Stdio MCP protocol requires JSON-RPC on stdout.
-    // ALL internal server logging MUST go to stderr to prevent stream corruption.
+    // Stdio MCP protocol reserves stdout for JSON-RPC frames.
+    // Write all internal logs to stderr to prevent stream corruption.
     try {
       process.stderr.write(`[spector:${level.toUpperCase()}] ${JSON.stringify(entry)}\n`);
     } catch {
-      // Fallback in case stderr stream is closing
+      // Ignore write errors while stderr stream is closing.
     }
   }
 
@@ -86,6 +86,9 @@ export class TelemetryLogger {
     if (error instanceof Error) {
       errorDetails.errorMessage = error.message;
       errorDetails.errorName = error.name;
+      if (error.cause instanceof Error) {
+        errorDetails.cause = error.cause.message;
+      }
       if (this.currentLevel === 'debug') {
         errorDetails.stack = error.stack;
       }
@@ -97,29 +100,6 @@ export class TelemetryLogger {
       ...errorDetails,
       ...extra
     });
-  }
-
-  /**
-   * Times an async operation and logs its completion or failure.
-   */
-  public async measure<T>(
-    toolOrOp: string,
-    fn: () => Promise<T>,
-    metadata?: Record<string, unknown>
-  ): Promise<T> {
-    const startTime = Date.now();
-    this.debug('operation_started', { operation: toolOrOp, ...metadata });
-
-    try {
-      const result = await fn();
-      const durationMs = Date.now() - startTime;
-      this.info('operation_completed', { operation: toolOrOp, durationMs, ...metadata });
-      return result;
-    } catch (err) {
-      const durationMs = Date.now() - startTime;
-      this.error('operation_failed', err, { operation: toolOrOp, durationMs, ...metadata });
-      throw err;
-    }
   }
 }
 
