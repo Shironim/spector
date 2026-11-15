@@ -1,7 +1,7 @@
 {
   "name": "@dimassetoid/spector",
   "version": "1.0.4",
-  "description": "Standalone Browser Sharing & Visual Element Inspector MCP Server",
+  "description": "Perceptual Design, Motion & CSS Forensics Compiler MCP Server for Live Physical Chrome",
   "type": "module",
   "main": "dist/index.js",
   "publishConfig": {
@@ -42,9 +42,10 @@
     "build:tsc": "tsc",
     "test": "bun test tests/unit",
     "test:live": "bun tests/live/live-verification.mjs",
+    "test:regressions": "bun run build && bun test tests/live/*.test.ts",
     "prepack": "npm run build && npm test",
     "prepublishOnly": "npm run build && npm test",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js serve"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.6.1",

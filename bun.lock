@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "live-dom",
+      "name": "@dimassetoid/spector",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.6.1",
         "playwright-core": "^1.50.1",
