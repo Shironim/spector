@@ -11,10 +11,13 @@ test('diagnostic response budget failure does not drain logs',async()=>{
  manager.telemetry.addConsole('error','retained evidence',undefined,manager.targetId(page as any));
  let handler!:Function;
  registerDiagnoseTool({registerTool:(_name:string,_config:unknown,fn:Function)=>{handler=fn;}} as any,manager);
- const rejected=await handler({});expect(rejected.isError).toBe(true);
+ const rejected=await handler({clearLogs:true});expect(rejected.isError).toBe(true);
  expect(JSON.stringify(rejected)).toContain('RESOURCE_LIMIT_EXCEEDED');
  expect(manager.telemetry.getConsoleLogs('error',false)).toHaveLength(1);
  large=false;expect((await handler({})).isError).not.toBe(true);
+ // Default clearLogs is false so repeated diagnose calls do not drop buffered evidence.
+ expect(manager.telemetry.getConsoleLogs('error',false)).toHaveLength(1);
+ expect((await handler({clearLogs:true})).isError).not.toBe(true);
  expect(manager.telemetry.getConsoleLogs('error',false)).toHaveLength(0);
 });
 
