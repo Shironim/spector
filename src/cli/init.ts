@@ -4,30 +4,47 @@ import { SPECTOR_VERSION } from '../constants.js';
 
 export const SPECTOR_SKILL_CONTENT = `---
 name: spector-inspect
-description: Human-to-AI visual annotation (Alt+P overlay picker, A/B pin comparison) and CSS/layout forensics on the developer's live physical Chrome via CDP.
+description: Live browser sharing, physical Chrome CDP attachment, Alt+P Design Blueprint extraction (typography, subtree summary, :hover/:focus-visible deltas, auto-forensics), multi-pin A/B comparison, Before/After verification, compact layout/a11y/cascade forensics with Vue/React sourceFile mapping, and multi-breakpoint screenshots using Spector.
 ---
 
-# Skill: Spector Visual Bridge (\`spector-inspect\`)
+# Skill: Spector Browser Inspector (\`spector-inspect\`)
 
-> Use this skill when working with the developer's live Google Chrome session via **Spector** — a Human-to-AI Visual Annotation & CSS Forensics Bridge.
+> Use this skill when working with the developer's live Google Chrome session via **Spector** — a **6-tool Human-to-AI Visual Annotation & UI Forensics MCP Server** over Chrome DevTools Protocol (CDP). Works across Vue, Nuxt, React, Next.js, Svelte, and plain HTML.
+
+---
 
 ## 1. Core Operating Principles
 
 1. **Physical Chrome Reality (CDP First):**
-   - Spector attaches directly to the developer's Chrome via CDP (\`http://localhost:9222\`).
-   - Cookies, auth sessions, and local domains (\`localhost:port\`, \`.test\`) are preserved.
+   - Spector attaches directly to local Chrome via CDP (\`http://localhost:9222\` or \`ws://127.0.0.1:...\`).
+   - Cookies, auth sessions, and local domains (\`localhost:port\`, \`.test\`, Docker) are preserved; disconnecting never closes Chrome.
+   - When paired with \`agent-browser\`, delegate multi-step forms or E2E flows to \`agent-browser\`, then sync the active tab with \`spector_tabs({ action: "select", latest: true })\`.
 2. **Point-and-Prompt Fast Path:**
    - Whenever the user refers to *"the element I clicked"*, *"compare this with that"*, or pinned items via \`Alt + P\`, **always call \`spector_picker({ action: "get" })\` first**.
-3. **Structured CSS Forensics over Pixel Guessing:**
-   - Use \`spector_diagnose({ selector, breakpoints })\` to inspect CSS cascade winners/overrides, horizontal overflow culprits, sticky/clipping traps, z-index stacking traps, and active-tab console/network errors.
+3. **Structured Forensics & Compact Context:**
+   - \`spector_diagnose\` defaults to \`detail: "compact"\` (grouping repetitive findings by selector pattern) and \`clearLogs: false\` (preserving buffered runtime logs across calls).
+   - Use \`sourceFile\` (dev-mode Vue 3/Nuxt, React 17/18 \`_debugSource\`, React 19 \`_debugStack\`) and \`delta\` (session before/after diff) to jump straight to source files and verify fixes.
 
-## 2. Core Tools (5 Tools)
+---
 
-- \`spector_attach\`: Connect to physical Chrome via CDP.
-- \`spector_tabs\`: List open Chrome tabs or switch the active tab by index, URL, title, or \`latest: true\`.
-- \`spector_picker\`: Retrieve \`Alt + P\` pinned blueprint(s) & A/B diffs (\`action: "get"\`), launch the interactive overlay (\`action: "pick"\`), or clear the pin queue (\`action: "clear"\`).
-- \`spector_diagnose\`: Run layout traps, CDP CSS cascade analysis, multi-breakpoint overflow checks, and active-tab runtime errors.
-- \`spector_capture_screenshot\`: Capture the active tab, a selector, or responsive breakpoints (\`mobile\`, \`tablet\`, \`desktop\`) with optional \`colorScheme\` / \`reducedMotion\` emulation.
+## 2. Tool Map (6 Core Tools)
+
+| Tool | Role |
+| :--- | :--- |
+| \`spector_attach\` | Connects to local Chrome CDP (\`cdpUrl\`, \`autoSelectActiveTab\`, \`autoLaunch\`). |
+| \`spector_tabs\` | Lists open tabs (\`"list"\`), switches active tab (\`"select"\`), reloads (\`"reload"\`), or navigates local dev / same-origin routes (\`"navigate"\`, \`clearLogsOnNavigate: true\` default). |
+| \`spector_picker\` | Retrieves \`Alt+P\` Design Blueprints + auto-forensics (\`"get"\`), opens overlay (\`"pick"\`), snapshots a selector (\`"snapshot"\`), verifies Before vs After diffs (\`"verify"\`), or clears the pin queue (\`"clear"\`). |
+| \`spector_diagnose\` | Runs grouped (\`detail: "compact"\`) layout/scroll/clipping forensics (\`internalHorizontalScroll\`, \`clippedInViewport\`), WCAG AA contrast & mobile touch targets (\`viewport\`, \`breakpoints\`), DOM→\`sourceFile\` mapping, optional design tokens (\`includeTokens\`), CDP CSS cascade (\`selector\`), session \`delta\`, and scoped console/network logs (\`runtimeScope: "current-document" | "active-tab" | "browser-session"\`). |
+| \`spector_capture_screenshot\` | Captures element, viewport, full-page, \`mobile\`/\`tablet\`/\`desktop\` breakpoints, and batch \`colorSchemes: ["light", "dark"]\` PNGs with optional \`hideDevtoolsOverlays\` / \`hideSelectors\` and automatic viewport & media restoration. |
+| \`spector_interact\` | Triggers lightweight UI states (\`click\`, \`hover\`, \`scrollTo\`) to open dropdowns, tabs, modals, or scroll sections during visual audits. |
+
+---
+
+## 3. Common Workflows
+
+- **Point-and-Prompt + Verify:** \`spector_picker({ action: "get", includeHoverState: true })\` → edit code → \`spector_picker({ action: "verify" })\`.
+- **Full Page Audit:** \`spector_diagnose({ breakpoints: ["mobile", "desktop"], runtimeScope: "current-document" })\` → edit code → re-run \`spector_diagnose\` to inspect the \`delta\` block.
+- **Clean Multi-Theme Screenshot:** \`spector_capture_screenshot({ breakpoints: ["mobile", "desktop"], colorSchemes: ["light", "dark"], hideDevtoolsOverlays: true })\`.
 `;
 
 export function handleInitCommand(): void {
