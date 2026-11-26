@@ -6,6 +6,20 @@ import { SpectorError } from '../utils/mcp-response.js';
 import { evaluateInPage, withCdpSession } from '../utils/cdp.js';
 import type { BrowserOperationEngine } from './operation-engine.js';
 
+export const DEVTOOLS_OVERLAY_SELECTORS: readonly string[] = [
+  '#nuxt-devtools-container',
+  '[data-nuxt-devtools]',
+  'nuxt-devtools-frame',
+  '#__vue-devtools-container__',
+  '.vue-devtools__anchor',
+  'nextjs-portal',
+  '#__next-build-watcher',
+  '[data-nextjs-toast]',
+  '[data-nextjs-dialog-overlay]',
+  'vite-error-overlay',
+  '.tsqd-parent-container'
+];
+
 export class RenderCapture {
   public constructor(
     private readonly operations: BrowserOperationEngine,
@@ -206,6 +220,39 @@ export class RenderCapture {
         }
       }
     });
+  }
+
+  public async withHiddenSelectors<T>(
+    target: Page,
+    selectors: string[] | undefined,
+    runner: () => Promise<T>
+  ): Promise<T> {
+    const cleaned = (selectors ?? []).map(s => s.trim()).filter(Boolean);
+    if (cleaned.length === 0) {
+      return await runner();
+    }
+
+    const escapedSelectors = cleaned.map(s => escapeTailwindSelector(s));
+    const cssText = `${escapedSelectors.join(', ')} { visibility: hidden !important; pointer-events: none !important; }`;
+
+    await evaluateInPage(target, (css: string) => {
+      let style = document.querySelector('style[data-spector-hide-overlay="true"]') as HTMLStyleElement | null;
+      if (!style) {
+        style = document.createElement('style');
+        style.setAttribute('data-spector-hide-overlay', 'true');
+        (document.head || document.documentElement).appendChild(style);
+      }
+      style.textContent = css;
+    }, cssText);
+
+    try {
+      return await runner();
+    } finally {
+      await evaluateInPage(target, () => {
+        const style = document.querySelector('style[data-spector-hide-overlay="true"]');
+        if (style) style.remove();
+      }).catch(() => {});
+    }
   }
 
 }

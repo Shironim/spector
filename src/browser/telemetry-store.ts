@@ -41,7 +41,14 @@ export class TelemetryStore {
   private failedNetworkLogs: NetworkLogEntry[] = [];
   private networkLogSequence = 0;
 
-  private appendConsoleEntry(type: string, text: string, location?: string, targetId?: string): void {
+  private appendConsoleEntry(
+    type: string,
+    text: string,
+    location?: string,
+    targetId?: string,
+    documentId?: string,
+    pageUrl?: string
+  ): void {
     const cleanLocation = sanitizeConsoleLocation(location);
     const last = this.consoleLogs[this.consoleLogs.length - 1];
     const truncated = text.length > TELEMETRY_LIMITS.MAX_CONSOLE_TEXT_CHARS;
@@ -52,7 +59,8 @@ export class TelemetryStore {
       last.type === type &&
       last.text === text &&
       last.location === cleanLocation &&
-      last.targetId === targetId
+      last.targetId === targetId &&
+      last.documentId === documentId
     ) {
       last.count = (last.count || 1) + 1;
       last.timestamp = new Date().toISOString();
@@ -66,6 +74,8 @@ export class TelemetryStore {
       timestamp: new Date().toISOString(),
       ...(cleanLocation ? { location: cleanLocation } : {}),
       ...(targetId ? { targetId } : {}),
+      ...(documentId ? { documentId } : {}),
+      ...(pageUrl ? { pageUrl } : {}),
       count: 1
     });
 
@@ -74,13 +84,26 @@ export class TelemetryStore {
     }
   }
 
-  public addConsole(type: string, text: string, location?: string, targetId?: string): void {
-    this.appendConsoleEntry(type, text, location, targetId);
+  public addConsole(
+    type: string,
+    text: string,
+    location?: string,
+    targetId?: string,
+    documentId?: string,
+    pageUrl?: string
+  ): void {
+    this.appendConsoleEntry(type, text, location, targetId, documentId, pageUrl);
   }
 
-  public addPageError(message: string, stack?: string, targetId?: string): void {
+  public addPageError(
+    message: string,
+    stack?: string,
+    targetId?: string,
+    documentId?: string,
+    pageUrl?: string
+  ): void {
     const text = `Uncaught Exception: ${message}${stack ? `\n${stack}` : ''}`;
-    this.appendConsoleEntry('error', text, undefined, targetId);
+    this.appendConsoleEntry('error', text, undefined, targetId, documentId, pageUrl);
   }
 
   /**
@@ -95,6 +118,8 @@ export class TelemetryStore {
     durationMs?: number;
     error?: string;
     targetId?: string;
+    documentId?: string;
+    pageUrl?: string;
   }): NetworkLogEntry | null {
     const isFailure = input.error !== undefined || (input.status !== undefined && input.status >= 400);
     if (!isFailure) return null;
@@ -109,6 +134,8 @@ export class TelemetryStore {
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
       timestamp: new Date().toISOString(),
       ...(input.targetId ? { targetId: input.targetId } : {}),
+      ...(input.documentId ? { documentId: input.documentId } : {}),
+      ...(input.pageUrl ? { pageUrl: input.pageUrl } : {}),
       ...(input.error ? { error: input.error } : {})
     };
 
@@ -123,11 +150,15 @@ export class TelemetryStore {
     level: 'all' | 'error' | 'warn' = 'error',
     clearAfterRead: boolean = true,
     limit: number = TELEMETRY_LIMITS.CONSOLE_LOG_DEFAULT_LIMIT,
-    targetId?: string
+    targetId?: string,
+    documentId?: string
   ): ConsoleLogEntry[] {
     let result = [...this.consoleLogs];
     if (targetId) {
       result = result.filter(log => log.targetId === targetId);
+    }
+    if (documentId) {
+      result = result.filter(log => log.documentId === documentId);
     }
     if (level === 'error') {
       result = result.filter(log => log.type === 'error');
@@ -150,11 +181,15 @@ export class TelemetryStore {
     clearAfterRead: boolean = true,
     limit: number = TELEMETRY_LIMITS.NETWORK_LOG_DEFAULT_LIMIT,
     pathnameFilter?: string,
-    targetId?: string
+    targetId?: string,
+    documentId?: string
   ): NetworkLogEntry[] {
     let result = [...this.failedNetworkLogs];
     if (targetId) {
       result = result.filter(log => log.targetId === targetId);
+    }
+    if (documentId) {
+      result = result.filter(log => log.documentId === documentId);
     }
 
     if (pathnameFilter) {
@@ -171,6 +206,11 @@ export class TelemetryStore {
       this.failedNetworkLogs = this.failedNetworkLogs.filter(log => !returnedIds.has(log.id));
     }
     return result;
+  }
+
+  public clearForTarget(targetId: string): void {
+    this.consoleLogs = this.consoleLogs.filter(log => log.targetId !== targetId);
+    this.failedNetworkLogs = this.failedNetworkLogs.filter(log => log.targetId !== targetId);
   }
 
   public static formatFailedNetworkLine(entry: NetworkLogEntry): string {

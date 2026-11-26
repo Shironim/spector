@@ -13,6 +13,7 @@ import type {
 import { type BreakpointPreset, TIMEOUTS } from '../constants.js';
 import { TelemetryStore } from './telemetry-store.js';
 import { PinStore } from './pin-store.js';
+import { DiagnoseBaselineStore } from './diagnose-baseline.js';
 import { extractCdpPort, launchChromeForCdp, validateCdpEndpoint } from './chrome-launcher.js';
 import { HOTKEY_BINDING_SCRIPT, OVERLAY_ENGINE_SCRIPT } from './overlay-script.js';
 import { SpectorError } from '../utils/mcp-response.js';
@@ -163,6 +164,7 @@ export class CdpSessionManager {
 
   public readonly telemetry = new TelemetryStore();
   public readonly pins = new PinStore();
+  public readonly diagnoseBaselines = new DiagnoseBaselineStore();
 
   private requestStartTimes = new Map<Request, number>();
   private attachedPages = new WeakSet<Page>();
@@ -202,6 +204,17 @@ export class CdpSessionManager {
     let id = this.targetIds.get(page);
     if (!id) { id = `target-${++this.nextTargetId}`; this.targetIds.set(page, id); }
     return id;
+  }
+
+  public documentId(page: Page): string {
+    try {
+      if (typeof (page as { isClosed?: unknown }).isClosed === 'function' && !page.isClosed()) {
+        return this.documents.id(page);
+      }
+    } catch {
+      // Fallback when page is closing or mocked without full Playwright lifecycle.
+    }
+    return 'document-0';
   }
 
   public pageUrl(page: Page): string {
@@ -471,12 +484,25 @@ export class CdpSessionManager {
       if (!this.pageListeners.has(page)) return;
       const loc = msg.location();
       const locationStr = loc?.url ? `${loc.url}:${loc.lineNumber}` : undefined;
-      this.telemetry.addConsole(msg.type(), msg.text(), locationStr, this.targetId(page));
+      this.telemetry.addConsole(
+        msg.type(),
+        msg.text(),
+        locationStr,
+        this.targetId(page),
+        this.documentId(page),
+        evidenceUrl(this.pageUrl(page))
+      );
     });
 
     this.listenPage(page, 'pageerror', (error) => {
       if (!this.pageListeners.has(page)) return;
-      this.telemetry.addPageError(error.message, error.stack, this.targetId(page));
+      this.telemetry.addPageError(
+        error.message,
+        error.stack,
+        this.targetId(page),
+        this.documentId(page),
+        evidenceUrl(this.pageUrl(page))
+      );
     });
 
     this.listenPage(page, 'request', (req) => {
@@ -505,7 +531,9 @@ export class CdpSessionManager {
           status,
           statusText: res.statusText(),
           durationMs,
-          targetId: this.targetId(page)
+          targetId: this.targetId(page),
+          documentId: this.documentId(page),
+          pageUrl: evidenceUrl(this.pageUrl(page))
         });
       } catch {
         // Response inspection skipped when frame is destroyed mid-flight.
@@ -525,7 +553,9 @@ export class CdpSessionManager {
           resourceType: req.resourceType(),
           durationMs,
           error: req.failure()?.errorText || 'Request failed',
-          targetId: this.targetId(page)
+          targetId: this.targetId(page),
+          documentId: this.documentId(page),
+          pageUrl: evidenceUrl(this.pageUrl(page))
         });
       } catch {
         // Request failure ignored during frame teardown.
@@ -591,12 +621,14 @@ export class CdpSessionManager {
     waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
     openInNewTab?: boolean;
     timeoutMs?: number;
+    clearLogsOnNavigate?: boolean;
   }): Promise<ActiveTabInfo> {
     const currentPage = await this.ensurePage();
     const currentUrl = this.pageUrl(currentPage);
     const resolvedUrl = validateNavigationUrl(options.url, currentUrl);
     const waitUntil = options.waitUntil ?? 'load';
     const timeout = options.timeoutMs ?? TIMEOUTS.NAVIGATION_DEFAULT_MS;
+    const clearLogsOnNavigate = options.clearLogsOnNavigate ?? true;
 
     if (options.openInNewTab) {
       const context = await this.ensureContext();
@@ -616,6 +648,10 @@ export class CdpSessionManager {
       return { title: info.title, url: info.url, viewport: newPage.viewportSize() };
     }
 
+    if (clearLogsOnNavigate) {
+      this.telemetry.clearForTarget(this.targetId(currentPage));
+    }
+
     await this.operations.run(
       currentPage,
       async () => {
@@ -631,10 +667,16 @@ export class CdpSessionManager {
   public async reloadTab(options: {
     waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
     timeoutMs?: number;
+    clearLogsOnNavigate?: boolean;
   } = {}): Promise<ActiveTabInfo> {
     const page = await this.ensurePage();
     const waitUntil = options.waitUntil ?? 'load';
     const timeout = options.timeoutMs ?? TIMEOUTS.NAVIGATION_DEFAULT_MS;
+    const clearLogsOnNavigate = options.clearLogsOnNavigate ?? true;
+
+    if (clearLogsOnNavigate) {
+      this.telemetry.clearForTarget(this.targetId(page));
+    }
 
     await this.operations.run(
       page,
@@ -933,6 +975,14 @@ export class CdpSessionManager {
     return this.renderer.withEmulatedMedia(target ?? await this.ensurePage(), media, runner);
   }
 
+  public async withHiddenSelectors<T>(
+    selectors: string[] | undefined,
+    runner: () => Promise<T>,
+    target?: Page
+  ): Promise<T> {
+    return this.renderer.withHiddenSelectors(target ?? await this.ensurePage(), selectors, runner);
+  }
+
   private async setupHotkeyPicker(page: Page): Promise<void> {
     if (page.isClosed()) return;
     try {
@@ -984,6 +1034,7 @@ export class CdpSessionManager {
 
   public async disconnect(): Promise<void> {
     this.documents.clear();
+    this.diagnoseBaselines.clear();
     if (this.pendingPageSetups.size > 0) {
       await Promise.allSettled([...this.pendingPageSetups]);
       this.pendingPageSetups.clear();
