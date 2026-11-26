@@ -41,7 +41,10 @@ Captures PNG screenshots of the active viewport, a target selector, the full scr
 | `fullPage` | `boolean` | `false` | Captures entire scrollable page height. |
 | `breakpoints` | `("mobile" \| "tablet" \| "desktop")[]` | — | Responsive presets (`mobile=375x812`, `tablet=768x1024`, `desktop=1440x900`) via CDP Emulation. |
 | `colorScheme` | `"light" \| "dark"` | — | Optional `prefers-color-scheme` media emulation for the capture (restored afterward). |
+| `colorSchemes` | `("light" \| "dark")[]` | — | Optional batch of `prefers-color-scheme` themes to capture in one call (overrides `colorScheme`). |
 | `reducedMotion` | `boolean` | — | Optional `prefers-reduced-motion` media emulation for the capture (restored afterward). |
+| `hideDevtoolsOverlays` | `boolean` | `false` | Temporarily hides common framework DevTools overlays (Nuxt, Vue, Next.js, Vite, TanStack) via an atomic `<style data-spector-hide-overlay="true">` element and restores afterward. |
+| `hideSelectors` | `string[]` | — | Optional CSS selectors to temporarily hide during screenshot capture and restore afterward. |
 
 ### Breakpoint & Safety Contract
 - **Per-Breakpoint Partial Results:** If a `selector` is missing at one breakpoint (e.g. `.mobile-only` on `desktop`), that breakpoint records `ELEMENT_NOT_READY` while successful breakpoint images are still returned (`status: "partial"`).

@@ -31,11 +31,15 @@ Unified tab discovery and switching tool.
 
 | Parameter | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `action` | `"list" \| "select"` | *inferred* | `"list"` returns all open tabs; `"select"` switches the active target. If omitted: defaults to `"select"` when `index`, `url`, `title`, or `latest: true` is provided, otherwise `"list"`. |
+| `action` | `"list" \| "select" \| "navigate" \| "reload"` | *inferred* | `"list"` returns all open tabs; `"select"` switches the active target; `"navigate"` loads a localhost/same-origin URL (or relative path); `"reload"` reloads the active tab. If omitted: defaults to `"select"` when `index`, `url`, `title`, or `latest: true` is provided, otherwise `"list"`. |
 | `index` | `number` | — | Target tab index from `spector_tabs({ action: "list" })`. |
-| `url` | `string` | — | URL substring or simple wildcard glob (e.g. `"localhost:3000"`, `"*stripe.com*"`). |
-| `title` | `string` | — | Page title substring to match. |
+| `url` | `string` | — | URL substring/glob for `"select"`, or localhost/same-origin URL (or relative path) for `"navigate"`. |
+| `title` | `string` | — | Page title substring to match for `"select"`. |
 | `latest` | `boolean` | — | Selects the newest/last tab in browser context order (useful to sync after an external CDP client opens a tab). |
+| `waitUntil` | `"load" \| "domcontentloaded" \| "networkidle"` | `"load"` | Navigation/reload lifecycle event to wait for. |
+| `openInNewTab` | `boolean` | `false` | Opens the navigated URL in a new tab and switches to it when `action: "navigate"`. |
+| `timeoutMs` | `number` | `15000` | Optional navigation/reload timeout in milliseconds (`500–60000`). |
+| `clearLogsOnNavigate` | `boolean` | `true` | Clears buffered console/failed-network logs for the active tab before navigating or reloading so per-route audits stay clean. |
 
 ### Shared-Browser Target Contract
 - Opening new tabs or reattaching to the same connected context **does not hijack** the currently selected tab.
