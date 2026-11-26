@@ -1,7 +1,7 @@
 import type { Page } from 'playwright-core';
 import type { AccessibilityForensicsReport } from '../types.js';
 import { evaluateInPage } from '../utils/cdp.js';
-import { escapeTailwindSelector, IN_BROWSER_CSS_SELECTOR_FN } from '../utils/selector.js';
+import { escapeTailwindSelector, IN_BROWSER_CSS_SELECTOR_FN, IN_BROWSER_SOURCE_FILE_FN } from '../utils/selector.js';
 import { SpectorError } from '../utils/mcp-response.js';
 import { TOKEN_BUDGETS } from '../constants.js';
 
@@ -31,6 +31,12 @@ export async function runAccessibilityForensics(
     const escapedRootSelector = ${JSON.stringify(escapedRootSelector ?? null)};
     const forceTouchTargets = ${JSON.stringify(forceTouchTargets ?? null)};
     ${IN_BROWSER_CSS_SELECTOR_FN}
+    ${IN_BROWSER_SOURCE_FILE_FN}
+
+    const withSourceFile = (el) => {
+      const sf = getSourceFile(el);
+      return sf ? { sourceFile: sf } : {};
+    };
 
     const styleCache = new WeakMap();
     const getStyle = (el) => {
@@ -194,17 +200,58 @@ export async function runAccessibilityForensics(
 
     let scannedElements = 0;
     let skippedHiddenElements = 0;
+    let skippedRepetitiveElements = 0;
     let unverifiableContrastCount = 0;
     let h1Count = 0;
     let lastHeadingLevel = 0;
 
     const elements = rawElements.filter(el => !el.closest || !el.closest('[data-spector-activity]'));
 
+    const skippedRows = new Set();
+    if (elements.length > maxElements) {
+      const rowGroups = new Map();
+      for (let i = 0; i < elements.length; i++) {
+        const el = elements[i];
+        const tag = el.tagName ? el.tagName.toLowerCase() : '';
+        const role = el.getAttribute ? el.getAttribute('role') : '';
+        const parent = el.parentElement;
+        if (!parent) continue;
+        const pTag = parent.tagName ? parent.tagName.toLowerCase() : '';
+        const pRole = parent.getAttribute ? parent.getAttribute('role') : '';
+        if ((tag === 'tr' && pTag === 'tbody') || (role === 'row' && pRole === 'rowgroup')) {
+          let rows = rowGroups.get(parent);
+          if (!rows) { rows = []; rowGroups.set(parent, rows); }
+          rows.push(el);
+        }
+      }
+      rowGroups.forEach((rows) => {
+        if (rows.length > 4) {
+          for (let r = 3; r < rows.length - 1; r++) {
+            skippedRows.add(rows[r]);
+          }
+        }
+      });
+    }
+
+    const isInSkippedRow = (el) => {
+      if (skippedRows.size === 0) return false;
+      let curr = el;
+      while (curr && curr !== document.body && curr !== document.documentElement) {
+        if (skippedRows.has(curr)) return true;
+        curr = curr.parentElement;
+      }
+      return false;
+    };
+
     for (let i = 0; i < elements.length; i++) {
       const el = elements[i];
       if (!(el instanceof HTMLElement)) continue;
       if (isHiddenOrInHiddenAncestor(el)) {
         skippedHiddenElements++;
+        continue;
+      }
+      if (isInSkippedRow(el)) {
+        skippedRepetitiveElements++;
         continue;
       }
       if (scannedElements >= maxElements) break;
@@ -225,7 +272,8 @@ export async function runAccessibilityForensics(
               selector: getCssSelector(el),
               tag,
               issue: 'multiple-h1',
-              detail: 'Multiple <h1> headings found on page (#' + h1Count + ').'
+              detail: 'Multiple <h1> headings found on page (#' + h1Count + ').',
+              ...withSourceFile(el)
             });
           }
         }
@@ -234,7 +282,8 @@ export async function runAccessibilityForensics(
             selector: getCssSelector(el),
             tag,
             issue: 'skipped-level',
-            detail: 'Heading level jumped from <h' + lastHeadingLevel + '> to <h' + level + '>.'
+            detail: 'Heading level jumped from <h' + lastHeadingLevel + '> to <h' + level + '>.',
+            ...withSourceFile(el)
           });
         }
         lastHeadingLevel = level;
@@ -254,7 +303,8 @@ export async function runAccessibilityForensics(
             ...(role ? { role } : {}),
             reason: tag === 'img'
               ? 'Image is missing alt attribute (use alt="" if decorative).'
-              : 'Interactive <' + tag + '> has no accessible name (add text, aria-label, or associated label).'
+              : 'Interactive <' + tag + '> has no accessible name (add text, aria-label, or associated label).',
+            ...withSourceFile(el)
           });
         }
       }
@@ -266,7 +316,8 @@ export async function runAccessibilityForensics(
             tag,
             width: Math.round(rect.width),
             height: Math.round(rect.height),
-            minRequired: 44
+            minRequired: 44,
+            ...withSourceFile(el)
           });
         }
       }
@@ -297,7 +348,8 @@ export async function runAccessibilityForensics(
                 ratio: Math.round(ratio * 100) / 100,
                 requiredRatio,
                 fontSize: cs.fontSize || '16px',
-                fontWeight: cs.fontWeight || '400'
+                fontWeight: cs.fontWeight || '400',
+                ...withSourceFile(el)
               });
             }
           }
@@ -311,6 +363,7 @@ export async function runAccessibilityForensics(
         ...(rawRootSelector ? { rootSelector: rawRootSelector } : {}),
         scannedElements,
         ...(skippedHiddenElements > 0 ? { skippedHiddenElements } : {}),
+        ...(skippedRepetitiveElements > 0 ? { skippedRepetitiveElements } : {}),
         unverifiableContrastCount,
         touchTargetsChecked: checkTouchTargets,
         issueLimitPerCategory: maxIssues

@@ -120,3 +120,93 @@ function sanitizeUrlPath(rawUrl) {
   }
 }
 `;
+
+export const IN_BROWSER_SOURCE_FILE_FN = `
+function sanitizeSourceFile(rawFile, lineNumber) {
+  if (!rawFile || typeof rawFile !== 'string') return undefined;
+  const normalized = rawFile.replace(/\\\\/g, '/').replace(/^file:\\/\\//, '');
+  const withLeadingSlash = normalized.startsWith('/') ? normalized : '/' + normalized;
+  const markers = ['/app/', '/src/', '/pages/', '/components/', '/layouts/', '/views/', '/features/', '/modules/', '/widgets/'];
+  let shortPath = normalized;
+  for (const marker of markers) {
+    const idx = withLeadingSlash.lastIndexOf(marker);
+    if (idx !== -1) {
+      shortPath = withLeadingSlash.slice(idx + 1);
+      break;
+    }
+  }
+  if (shortPath === normalized && normalized.startsWith('/')) {
+    const parts = normalized.split('/').filter(Boolean);
+    shortPath = parts.slice(-4).join('/');
+  }
+  if (typeof lineNumber === 'number' && Number.isFinite(lineNumber) && lineNumber > 0) {
+    return shortPath + ':' + Math.round(lineNumber);
+  }
+  return shortPath || undefined;
+}
+
+function getSourceFile(el) {
+  if (!el || el.nodeType !== 1) return undefined;
+  let curr = el;
+  let fallbackFile;
+  for (let depth = 0; curr && depth < 12; depth++) {
+    // Vue 3 / Nuxt dev metadata
+    const vueComp = curr.__vueParentComponent;
+    if (vueComp) {
+      let vc = vueComp;
+      for (let vDepth = 0; vc && vDepth < 8; vDepth++) {
+        const raw = vc.type && vc.type.__file;
+        if (typeof raw === 'string' && raw) {
+          if (!raw.includes('node_modules')) {
+            return sanitizeSourceFile(raw);
+          }
+          if (!fallbackFile) fallbackFile = sanitizeSourceFile(raw);
+        }
+        vc = vc.parent;
+      }
+    }
+
+    // React Fiber dev metadata (React 17/18 _debugSource + React 19 _debugStack)
+    const keys = Object.keys(curr);
+    for (let k = 0; k < keys.length; k++) {
+      const key = keys[k];
+      if (key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$')) {
+        let fiber = curr[key];
+        for (let fDepth = 0; fiber && fDepth < 12; fDepth++) {
+          const src = fiber._debugSource || (fiber._debugOwner && fiber._debugOwner._debugSource);
+          if (src && typeof src.fileName === 'string' && src.fileName) {
+            if (!src.fileName.includes('node_modules')) {
+              return sanitizeSourceFile(src.fileName, src.lineNumber);
+            }
+            if (!fallbackFile) fallbackFile = sanitizeSourceFile(src.fileName, src.lineNumber);
+          }
+          // React 19 removed _debugSource in favor of _debugStack (Error with JSX callsite stack)
+          const stack = (fiber._debugStack && typeof fiber._debugStack.stack === 'string' && fiber._debugStack.stack) ||
+            (fiber._debugOwner && fiber._debugOwner._debugStack && typeof fiber._debugOwner._debugStack.stack === 'string' && fiber._debugOwner._debugStack.stack);
+          if (stack) {
+            const lines = stack.split('\\n');
+            for (let li = 0; li < lines.length; li++) {
+              const m = lines[li].match(/(?:https?:\\/\\/[^\\/\\s)]+\\/|file:\\/\\/|\\()([^\\s():]+\\.(?:[jt]sx?|mjs|cjs)):(\\d+)/);
+              if (m && m[1] && !m[1].includes('node_modules') && !m[1].includes('react-dom')) {
+                return sanitizeSourceFile(m[1], Number(m[2]));
+              }
+            }
+          }
+          fiber = fiber.return;
+        }
+        break;
+      }
+    }
+
+    curr = curr.parentElement;
+  }
+  return fallbackFile;
+}
+`;
+
+export function normalizeSelectorPattern(selector: string): string {
+  if (!selector) return selector;
+  return selector
+    .replace(/:nth-of-type\(\d+\)/g, ':nth-of-type(*)')
+    .replace(/:nth-child\(\d+\)/g, ':nth-child(*)');
+}

@@ -13,6 +13,8 @@ export interface ConsoleLogEntry {
   timestamp: string;
   location?: string;
   targetId?: string;
+  documentId?: string;
+  pageUrl?: string;
   count?: number;
 }
 
@@ -26,6 +28,8 @@ export interface NetworkLogEntry {
   durationMs?: number;
   timestamp: string;
   targetId?: string;
+  documentId?: string;
+  pageUrl?: string;
   error?: string;
 }
 
@@ -206,6 +210,7 @@ export interface ScanCoverage {
   candidateElements: number;
   visitedElements: number;
   skippedHiddenElements?: number;
+  skippedRepetitiveElements?: number;
   elementLimitReached: boolean;
   excluded: string[];
 }
@@ -215,6 +220,7 @@ export interface OverflowCulprit {
   overflowPx: number;
   rect: BoundingRect;
   reason: string;
+  sourceFile?: string;
 }
 
 export interface ClippingTrap {
@@ -223,6 +229,28 @@ export interface ClippingTrap {
   ancestorSelector?: string;
   ancestorOverflow?: string;
   rect: BoundingRect;
+  sourceFile?: string;
+}
+
+export interface InternalHorizontalScrollItem {
+  selector: string;
+  scrollWidth: number;
+  clientWidth: number;
+  overflowPx: number;
+  hasTable: boolean;
+  rect: BoundingRect;
+  sourceFile?: string;
+}
+
+export interface ViewportClippingItem {
+  selector: string;
+  tag: string;
+  edge: 'bottom' | 'right' | 'bottom-right';
+  clippedPx: number;
+  clippedBy: 'viewport' | 'ancestor';
+  ancestorSelector?: string;
+  rect: BoundingRect;
+  sourceFile?: string;
 }
 
 export interface StackingTrap {
@@ -230,6 +258,7 @@ export interface StackingTrap {
   zIndex: string;
   trappedInAncestor: string;
   ancestorContextReason: string;
+  sourceFile?: string;
 }
 
 export interface BrokenMediaItem {
@@ -239,6 +268,7 @@ export interface BrokenMediaItem {
   reason: string;
   naturalSize?: string;
   renderSize?: string;
+  sourceFile?: string;
 }
 
 export interface FontIssueItem {
@@ -253,6 +283,7 @@ export interface InactiveCssHint {
   property: string;
   value: string;
   reason: string;
+  sourceFile?: string;
 }
 
 export interface LayoutForensicsReport {
@@ -264,6 +295,8 @@ export interface LayoutForensicsReport {
     culprits: OverflowCulprit[];
   };
   clippingTraps: ClippingTrap[];
+  internalHorizontalScroll?: InternalHorizontalScrollItem[];
+  clippedInViewport?: ViewportClippingItem[];
   stackingTraps: StackingTrap[];
   brokenMedia: BrokenMediaItem[];
   fontIssues: FontIssueItem[];
@@ -313,7 +346,10 @@ export interface BreakpointAuditItem {
   hasHorizontalOverflow: boolean;
   overflowCulpritsCount: number;
   topCulprit?: string;
+  internalHorizontalScrollCount?: number;
+  clippedInViewportCount?: number;
   touchTargetIssuesCount?: number;
+  touchTargetIssues?: TouchTargetIssueItem[];
   targetLayout?: BreakpointTargetLayout;
 }
 
@@ -326,6 +362,7 @@ export interface ContrastIssueItem {
   requiredRatio: number;
   fontSize: string;
   fontWeight: string;
+  sourceFile?: string;
 }
 
 export interface TouchTargetIssueItem {
@@ -334,6 +371,7 @@ export interface TouchTargetIssueItem {
   width: number;
   height: number;
   minRequired: number;
+  sourceFile?: string;
 }
 
 export interface MissingNameIssueItem {
@@ -341,6 +379,7 @@ export interface MissingNameIssueItem {
   tag: string;
   role?: string;
   reason: string;
+  sourceFile?: string;
 }
 
 export interface HeadingIssueItem {
@@ -348,6 +387,7 @@ export interface HeadingIssueItem {
   tag: string;
   issue: 'multiple-h1' | 'skipped-level';
   detail: string;
+  sourceFile?: string;
 }
 
 export interface AccessibilityForensicsReport {
@@ -356,6 +396,7 @@ export interface AccessibilityForensicsReport {
     rootSelector?: string;
     scannedElements: number;
     skippedHiddenElements?: number;
+    skippedRepetitiveElements?: number;
     unverifiableContrastCount: number;
     touchTargetsChecked: boolean;
     issueLimitPerCategory: number;
@@ -398,11 +439,39 @@ export interface DesignTokenAuditReport {
   slopSignals: string[];
 }
 
+export type DiagnoseDetailMode = 'compact' | 'full';
+export type DiagnoseRuntimeScope = 'current-document' | 'active-tab' | 'browser-session';
+
+export interface DiagnoseSummaryCounts {
+  visitedElements: number;
+  horizontalOverflowCulprits: number;
+  clippingTraps: number;
+  internalHorizontalScroll: number;
+  clippedInViewport: number;
+  stackingTraps: number;
+  brokenMedia: number;
+  fontIssues: number;
+  inactiveCss: number;
+  contrastIssues: number;
+  touchTargetIssues: number;
+  missingNames: number;
+  headingIssues: number;
+  consoleErrors: number;
+  failedNetwork: number;
+}
+
+export interface DiagnoseDelta {
+  previousCapturedAt: string;
+  changed: boolean;
+  changes: Record<string, { before: number; after: number; diff: number }>;
+}
+
 export interface DiagnoseReport {
+  detail?: DiagnoseDetailMode;
   url: string;
   viewport: { width: number; height: number } | null;
   runtimeHealth: {
-    scope?: 'active-tab' | 'browser-session';
+    scope?: DiagnoseRuntimeScope;
     consoleErrors: ConsoleLogEntry[];
     failedNetwork: NetworkLogEntry[];
   };
@@ -411,6 +480,7 @@ export interface DiagnoseReport {
   designTokens?: DesignTokenAuditReport;
   cssCascade?: CssCascadeReport;
   breakpointAudits?: BreakpointAuditItem[];
+  delta?: DiagnoseDelta;
 }
 
 export type SpectorErrorCode =
