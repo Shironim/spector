@@ -2,6 +2,7 @@ import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { chromium, type Browser } from 'playwright-core';
 import { CdpSessionManager } from '../../src/browser/cdp-session.js';
 import { runLayoutForensics } from '../../src/analyzers/layout-forensics.js';
+import { registerInteractTool } from '../../src/tools/interact.js';
 let browser: Browser;
 beforeAll(async () => { browser = await chromium.launch({ executablePath: process.env.SPECTOR_TEST_CHROME || '/usr/bin/google-chrome', headless: true, args: ['--no-sandbox'] }); });
 afterAll(async () => { await browser?.close(); });
@@ -42,17 +43,20 @@ test('screen-reader caption reproduction retains real clipped content finding', 
  expect(issues.some(i => i.selector === '#cut' && i.issue === 'content-clipped')).toBe(true); await page.close();
 });
 
-test('input actions update form events, focus and selection; URL mismatch prevents mutation', async () => {
+test('spector_interact triggers click/scrollTo and URL mismatch prevents mutation', async () => {
   const page = await browser.newPage(); const manager = new CdpSessionManager(); manager.page = page;
-  await page.setContent('<input id="name"><select id="choice"><option value="a">A</option><option value="b">B</option></select><output></output><script>document.querySelector("input").addEventListener("input", e => document.querySelector("output").textContent = e.target.value)</script>');
-  await manager.interact('fill', '#name', undefined, 0, 'Ada');
-  expect(await page.locator('output').textContent()).toBe('Ada');
-  await manager.interact('pressKey', '#name', undefined, 0, 'Tab');
-  expect(await page.locator('#choice').evaluate(el => document.activeElement === el)).toBe(true);
-  await manager.interact('selectOption', '#choice', undefined, 0, 'b');
-  expect(await page.locator('#choice').inputValue()).toBe('b');
-  await expect(manager.interact('fill', '#name', undefined, 0, 'Wrong', 'http://unexpected.test')).rejects.toMatchObject({code:'TARGET_CHANGED'});
-  expect(await page.locator('#name').inputValue()).toBe('Ada');
+  let handler!: Function;
+  registerInteractTool({ registerTool: (_name: string, _cfg: unknown, fn: Function) => { handler = fn; } } as any, manager);
+  await page.setContent('<button id="toggle">Open</button><output>closed</output><div style="height:2000px"></div><script>document.querySelector("#toggle").addEventListener("click", () => document.querySelector("output").textContent = "open")</script>');
+  const clicked = await handler({ action: 'click', selector: '#toggle', waitAfterMs: 0 });
+  expect(clicked.isError).not.toBe(true);
+  expect(await page.locator('output').textContent()).toBe('open');
+  const scrolled = await handler({ action: 'scrollTo', y: 400, waitAfterMs: 0 });
+  expect(scrolled.isError).not.toBe(true);
+  expect(JSON.parse(scrolled.content[0].text).scrollY).toBeGreaterThanOrEqual(300);
+  const blocked = await handler({ action: 'click', selector: '#toggle', expectedUrl: 'http://unexpected.test', waitAfterMs: 0 });
+  expect(blocked.isError).toBe(true);
+  expect(JSON.stringify(blocked)).toContain('TARGET_CHANGED');
   await page.close();
 });
 

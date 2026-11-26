@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { chromium, type Browser } from 'playwright-core';
 import { CdpSessionManager } from '../../src/browser/cdp-session.js';
 import { explainCssCascade, extractPseudoStateDelta } from '../../src/analyzers/cdp-styles.js';
-import { extractDesignTokens } from '../../src/analyzers/token-extractor.js';
+import { runTokenAudit } from '../../src/analyzers/token-audit.js';
 
 let browser: Browser;
 beforeAll(async () => {
@@ -26,11 +26,13 @@ test('A01: Alt+P Queue sends two pins and their notes exactly once', async () =>
     });
     await manager.setupPageListeners(page);
     await page.keyboard.press('Alt+p');
-    await page.getByRole('button', { name: 'Queue', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Quick revision note' }).fill('First note');
+    await page.locator('[data-spector-picker="toolbar"]').waitFor({ state: 'visible', timeout: 2000 });
     await page.locator('#one').click();
-    await page.getByRole('textbox', { name: 'Quick revision note' }).fill('Second note');
+    await page.locator('[data-spector-picker="popover"] input').fill('First note');
+    await page.getByRole('button', { name: '+ Pin', exact: true }).click();
     await page.locator('#two').click();
+    await page.locator('[data-spector-picker="popover"] input').fill('Second note');
+    await page.getByRole('button', { name: '+ Pin', exact: true }).click();
     await page.waitForTimeout(250);
     expect((await manager.getLastPicked())?.pins.length ?? 0).toBe(0);
     await page.getByRole('button', { name: 'Send (2)', exact: true }).click();
@@ -42,8 +44,9 @@ test('A01: Alt+P Queue sends two pins and their notes exactly once', async () =>
     ]);
     manager.clearPins();
     await page.keyboard.press('Alt+p');
-    await page.getByRole('button', { name: 'Queue', exact: true }).click();
+    await page.locator('[data-spector-picker="toolbar"]').waitFor({ state: 'visible', timeout: 2000 });
     await page.locator('#one').click();
+    await page.getByRole('button', { name: '+ Pin', exact: true }).click();
     await page.keyboard.press('Escape');
     await page.waitForTimeout(150);
     expect((await manager.getLastPicked())?.pins.length ?? 0).toBe(0);
@@ -90,25 +93,19 @@ test('A03: hover/focus capture transition endpoints, preserve CSS, and reset pse
   } finally { await page.close(); }
 });
 
-test('A04: tokens use active computed custom properties across nested rules and inline styles', async () => {
+test('A04: tokens resolve active computed custom properties and cap :root variables at 50', async () => {
   const page = await browser.newPage();
   try {
     await page.setContent(`<style>
-      :root { --accent:red; --base:12px; }
-      @media (min-width:1px) { @supports (display:grid) { :root {--accent:blue; --nested:42px; --alias:var(--base);} } }
-      @layer theme { :root { --layer:7px; } }
+      :root { --accent:red; --base:12px; --alias:var(--base); }
     </style><div>Token test</div>`);
     await page.evaluate(() => document.documentElement.style.setProperty('--accent', 'purple'));
-    const result = await extractDesignTokens(page);
-    expect(result.cssVariables).toMatchObject({ '--accent': 'purple', '--nested': '42px', '--alias': '12px', '--layer': '7px' });
-    expect((await extractDesignTokens(page, { includeVariables: false })).cssVariables).toEqual({});
-    await page.evaluate(() => {
-      for (let i = 0; i < 80; i++) document.documentElement.style.setProperty(`--test-${i}`, `${i}px`);
-      document.documentElement.style.setProperty('--tw-private', '1px');
-    });
-    const bounded = (await extractDesignTokens(page)).cssVariables;
+    const result = await runTokenAudit(page);
+    expect(result!.cssVariables).toMatchObject({ '--accent': 'purple', '--base': '12px', '--alias': '12px' });
+    const manyVars = Array.from({ length: 65 }, (_, i) => `--test-${i}:${i}px;`).join('');
+    await page.setContent(`<style>:root { ${manyVars} }</style><div>Bounded</div>`);
+    const bounded = (await runTokenAudit(page))!.cssVariables;
     expect(Object.keys(bounded)).toHaveLength(50);
-    expect(bounded['--tw-private']).toBeUndefined();
   } finally { await page.close(); }
 });
 

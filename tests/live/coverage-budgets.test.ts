@@ -1,7 +1,7 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { chromium, type Browser } from 'playwright-core';
 import { runLayoutForensics } from '../../src/analyzers/layout-forensics.js';
-import { extractDesignTokens } from '../../src/analyzers/token-extractor.js';
+import { runTokenAudit } from '../../src/analyzers/token-audit.js';
 import { extractCompressedDom } from '../../src/analyzers/dom-compressor.js';
 import { CdpSessionManager } from '../../src/browser/cdp-session.js';
 import { OVERLAY_ENGINE_SCRIPT } from '../../src/browser/overlay-script.js';
@@ -14,9 +14,9 @@ test('analyzers expose omitted candidates instead of implying full-page coverage
  const page=await browser.newPage();
  try{
   await page.setContent('<main>'+Array.from({length:650},(_,i)=>`<div>Item ${i}</div>`).join('')+'</main>');
-  const layout:any=await runLayoutForensics(page);const tokens:any=await extractDesignTokens(page);
+  const layout:any=await runLayoutForensics(page);const tokens:any=await runTokenAudit(page);
   expect(layout.coverage.visitedElements).toBe(600);expect(layout.coverage.elementLimitReached).toBe(true);
-  expect(tokens.coverage.visitedElements).toBe(300);expect(tokens.coverage.elementLimitReached).toBe(true);
+  expect(tokens.coverage.scannedElements).toBe(300);expect(tokens.coverage.limitReached).toBe(true);
   expect(layout.coverage.scope).toBe('document-light-dom');
  }finally{await page.close();}
 });
@@ -38,8 +38,7 @@ test('finding and variable caps are distinct from element coverage',async()=>{
   await page.setContent('<style>:root{'+Array.from({length:60},(_,i)=>`--value-${i}:${i}px;`).join('')+'}</style>'+Array.from({length:20},()=>'<div style="width:10px;overflow:hidden;white-space:nowrap">Clipped contents</div>').join(''));
   const layout:any=await runLayoutForensics(page);expect(layout.coverage.elementLimitReached).toBe(false);
   expect(layout.coverage.categoriesAtLimit).toContain('clippingTraps');
-  const tokens:any=await extractDesignTokens(page);expect(tokens.coverage.variablesAtLimit).toBe(true);
-  const without:any=await extractDesignTokens(page,{includeVariables:false});expect(without.coverage.variablesRequested).toBe(false);expect(without.coverage.variablesAtLimit).toBe(false);
+  const tokens:any=await runTokenAudit(page);expect(Object.keys(tokens.cssVariables)).toHaveLength(50);
   await page.setContent(Array.from({length:900},()=>`<button aria-label="${'x'.repeat(150)}">Target</button>`).join(''));
   const dom=await extractCompressedDom(page);expect(dom).toContain('CHAR_LIMIT');expect(dom.length).toBeLessThan(65000);
  }finally{await page.close();}
@@ -77,9 +76,14 @@ test('picker queue prevents an eleventh selection instead of losing the accepted
   await page.setContent('<button id="target" style="margin:100px;padding:20px">Target</button>');
   const pending=manager.pickElement({role:'pin',includeScreenshot:false,timeoutMs:10000});
   pending.catch(()=>{});
-  await page.getByRole('button',{name:'Queue',exact:true}).waitFor({state:'visible',timeout:2000});
-  for(let i=0;i<11;i++)await page.locator('#target').click();
-  expect(await page.getByText('Queue is full. Send these pins before adding more.',{exact:true}).isVisible()).toBe(true);
+  await page.locator('[data-spector-picker="toolbar"]').waitFor({state:'visible',timeout:2000});
+  for(let i=0;i<10;i++){
+    await page.locator('#target').click();
+    await page.getByRole('button',{name:'+ Pin',exact:true}).click();
+  }
+  await page.locator('#target').click();
+  await page.getByRole('button',{name:'+ Pin',exact:true}).click();
+  expect(await page.getByText('Queue is full. Click Send to finish.',{exact:true}).isVisible()).toBe(true);
   await page.getByRole('button',{name:'Send (10)',exact:true}).click();
   expect((await pending).pins).toHaveLength(10);
  }finally{await page.close();}
@@ -93,8 +97,10 @@ test('hotkey binding failures show failure instead of a success toast',async()=>
   await page.evaluate(OVERLAY_ENGINE_SCRIPT);
   const pending=page.evaluate(()=>(window as any).__spectorOverlay.start({source:'hotkey',timeoutMs:5000}));
   pending.catch(()=>{});
-  await page.getByRole('toolbar',{name:'Spector element picker'}).waitFor({state:'visible',timeout:1500});
+  await page.locator('[data-spector-picker="toolbar"]').waitFor({state:'visible',timeout:1500});
   await page.locator('#target').click({timeout:1500});
+  await page.locator('[data-spector-picker="popover"] input').waitFor({state:'visible',timeout:1500});
+  await page.keyboard.press('Enter');
   expect((await pending).status).toBe('cancelled');
   expect(await page.getByText('Spector could not collect this selection. Pick it again.',{exact:true}).isVisible()).toBe(true);
   const box=await page.getByText('Spector could not collect this selection. Pick it again.',{exact:true}).boundingBox();
@@ -111,8 +117,11 @@ test('coverage extraction and validated picker work on a strict-CSP page',async(
   expect(await extractCompressedDom(page)).toContain('CSP Target');
   expect((await runLayoutForensics(page)).coverage!.scope).toBe('document-light-dom');
   const pending=manager.pickElement({includeScreenshot:true,timeoutMs:5000});pending.catch(()=>{});
-  await page.getByRole('toolbar',{name:'Spector element picker'}).waitFor({state:'visible',timeout:1500});
-  await page.locator('#target').click();const result=await pending;
+  await page.locator('[data-spector-picker="toolbar"]').waitFor({state:'visible',timeout:1500});
+  await page.locator('#target').click();
+  await page.locator('[data-spector-picker="popover"] input').waitFor({state:'visible',timeout:1500});
+  await page.keyboard.press('Enter');
+  const result=await pending;
   expect(result.status).toBe('selected');expect(result.pins[0].sections!.screenshot!.status).toBe('captured');
  }finally{await page.close();}
 },15000);

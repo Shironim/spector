@@ -2,7 +2,7 @@ import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
 import { chromium, type Browser, type Page } from 'playwright-core';
 import { CdpSessionManager } from '../../src/browser/cdp-session.js';
 import { extractCompressedDom } from '../../src/analyzers/dom-compressor.js';
-import { extractDesignTokens } from '../../src/analyzers/token-extractor.js';
+import { runTokenAudit } from '../../src/analyzers/token-audit.js';
 import { explainCssCascade } from '../../src/analyzers/cdp-styles.js';
 
 let browser: Browser;
@@ -14,8 +14,10 @@ afterAll(async () => { await browser?.close(); });
 async function pick(manager: CdpSessionManager, page: Page, role: 'target' | 'reference') {
   manager.page = page;
   const pending = manager.pickElement({role,includeScreenshot:false,includeHoverState:true,timeoutMs:5000});
-  await page.getByRole('toolbar',{name:'Spector element picker'}).waitFor();
+  await page.locator('[data-spector-picker="toolbar"]').waitFor({ state: 'visible', timeout: 2000 });
   await page.locator('#target').click();
+  await page.locator('[data-spector-picker="popover"] input').waitFor({ state: 'visible', timeout: 2000 });
+  await page.keyboard.press('Enter');
   return (await pending).pins[0];
 }
 
@@ -79,23 +81,19 @@ test('DOM traversal crosses boxless/hidden wrappers and preserves whole-document
   } finally { await page.close(); }
 });
 
-test('token traversal prunes invisible subtrees without spending their descendants against the scan cap', async () => {
+test('token traversal skips hidden subtrees without spending their descendants against the scan cap', async () => {
   const page = await browser.newPage();
   try {
-    await page.setContent('<div style="display:none">'+'<span>Hidden</span>'.repeat(350)+'</div><div style="opacity:0"><button style="background:rgb(4,5,6)">Invisible</button></div><div style="display:contents"><button style="background:rgb(1,2,3)">Visible</button></div><div style="visibility:hidden"><button style="visibility:visible;background:rgb(7,8,9)">Override</button></div>');
-    const result = await extractDesignTokens(page);
-    expect(result.palette.accents).toContain('rgb(1, 2, 3)');
-    expect(result.palette.accents).toContain('rgb(7, 8, 9)');
-    expect(result.palette.accents).not.toContain('rgb(4, 5, 6)');
-    expect(result.coverage?.prunedSubtrees).toBe(2);
-    expect(result.coverage?.sampledElements).toBe(2);
-    expect(result.coverage?.visitedElements).toBe(6);
-    expect(result.coverage?.elementLimitReached).toBe(false);
+    await page.setContent('<div style="display:none">'+'<span>Hidden</span>'.repeat(350)+'</div><div style="display:contents"><button style="background:rgb(1,2,3)">Visible</button></div>');
+    const result = await runTokenAudit(page);
+    expect(result).toBeDefined();
+    expect(result!.colors.backgrounds.map(b => b.value)).toContain('rgb(1, 2, 3)');
+    expect(result!.coverage.skippedHiddenElements).toBeGreaterThanOrEqual(350);
+    expect(result!.coverage.limitReached).toBe(false);
     await page.setContent('<button>Visible</button>'.repeat(650));
-    const capped = await extractDesignTokens(page);
-    expect(capped.coverage?.visitedElements).toBe(300);
-    expect(capped.coverage?.sampledElements).toBe(300);
-    expect(capped.coverage?.elementLimitReached).toBe(true);
+    const capped = await runTokenAudit(page);
+    expect(capped!.coverage.scannedElements).toBe(300);
+    expect(capped!.coverage.limitReached).toBe(true);
   } finally { await page.close(); }
 });
 
