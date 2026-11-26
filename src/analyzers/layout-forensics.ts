@@ -1,5 +1,6 @@
 import type { Page } from 'playwright-core';
 import type { LayoutForensicsReport } from '../types.js';
+import { evaluateInPage } from '../utils/cdp.js';
 import { IN_BROWSER_CSS_SELECTOR_FN, IN_BROWSER_SANITIZE_PATH_FN } from '../utils/selector.js';
 import { TOKEN_BUDGETS } from '../constants.js';
 
@@ -298,5 +299,5 @@ export async function runLayoutForensics(page: Page): Promise<LayoutForensicsRep
     };
   })()`;
 
-  return await page.evaluate(script);
+  return await evaluateInPage(page, script);
 }

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import process from 'node:process';
 import { TIMEOUTS } from '../constants.js';
 import { SpectorError } from '../utils/mcp-response.js';
 
@@ -38,7 +39,28 @@ export function extractCdpPort(cdpUrl: string): string {
   return parsed.protocol === 'https:' || parsed.protocol === 'wss:' ? '443' : '9222';
 }
 
+function findExecutableOnPath(names: string[]): string | null {
+  const pathDirs = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  for (const name of names) {
+    for (const dir of pathDirs) {
+      const fullPath = path.join(dir, name);
+      try {
+        fs.accessSync(fullPath, fs.constants.X_OK);
+        return fullPath;
+      } catch {
+        // Not present or not executable in this PATH directory.
+      }
+    }
+  }
+  return null;
+}
+
 export function findChromeExecutable(): string | null {
+  const envChrome = process.env.CHROME_PATH?.trim();
+  if (envChrome && fs.existsSync(envChrome)) {
+    return envChrome;
+  }
+
   const platform = os.platform();
   if (platform === 'win32') {
     const candidates = [
@@ -52,10 +74,37 @@ export function findChromeExecutable(): string | null {
     return 'chrome.exe';
   }
   if (platform === 'darwin') {
-    const macPath = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-    return fs.existsSync(macPath) ? macPath : 'google-chrome';
+    const macCandidates = [
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+      '/Applications/Chromium.app/Contents/MacOS/Chromium'
+    ];
+    for (const candidate of macCandidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return 'google-chrome';
   }
-  return 'google-chrome';
+
+  const linuxPaths = [
+    '/usr/bin/google-chrome',
+    '/usr/bin/google-chrome-stable',
+    '/usr/bin/chromium',
+    '/usr/bin/chromium-browser',
+    '/snap/bin/chromium'
+  ];
+  for (const candidate of linuxPaths) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return findExecutableOnPath(['google-chrome', 'google-chrome-stable', 'chromium', 'chromium-browser']) ?? 'google-chrome';
+}
+
+function resolveDevProfileDir(): string {
+  let suffix = 'default';
+  try {
+    suffix = os.userInfo().username.replace(/[^a-zA-Z0-9_-]/g, '_') || 'default';
+  } catch {
+    // Fallback when userInfo is unavailable in minimal container environments.
+  }
+  return path.join(os.tmpdir(), `spector_chrome_profile_${suffix}`);
 }
 
 export async function waitForCdp(cdpUrl: string, maxWaitMs = TIMEOUTS.CDP_WAIT_MS): Promise<boolean> {
@@ -78,7 +127,7 @@ export async function launchChromeForCdp(cdpUrl: string): Promise<boolean> {
   if (!chromeExe) return false;
 
   const port = extractCdpPort(cdpUrl);
-  const devProfile = path.join(os.tmpdir(), 'chrome_dev_profile');
+  const devProfile = resolveDevProfileDir();
   const child = spawn(
     chromeExe,
     [`--remote-debugging-port=${port}`, `--user-data-dir=${devProfile}`],
@@ -87,6 +136,14 @@ export async function launchChromeForCdp(cdpUrl: string): Promise<boolean> {
       stdio: 'ignore'
     }
   );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('spawn', resolve);
+    });
+  } catch (cause) {
+    throw new SpectorError('CHROME_CDP_UNAVAILABLE', `Chrome could not be launched using "${chromeExe}".`, undefined, { cause });
+  }
   child.unref();
 
   return await waitForCdp(cdpUrl, TIMEOUTS.CDP_WAIT_MS);

@@ -2,10 +2,10 @@ import { describe, it } from 'bun:test';
 import assert from 'node:assert/strict';
 import { CdpSessionManager, extractCdpPort, validateCdpEndpoint } from '../../src/browser/cdp-session.js';
 import { PinStore } from '../../src/browser/pin-store.js';
-import { dispatchPageInteraction } from '../../src/browser/interactions.js';
 import { TelemetryStore, sanitizeNetworkPathname } from '../../src/browser/telemetry-store.js';
 import { SpectorError } from '../../src/utils/mcp-response.js';
 import { TOKEN_BUDGETS } from '../../src/constants.js';
+import { evaluateInPage, setMainFrameCorrupted } from '../../src/utils/cdp.js';
 
 describe('CdpSessionManager & TelemetryStore Invariants', () => {
   it('instantiates cleanly in unattached state', async () => {
@@ -182,42 +182,6 @@ describe('CdpSessionManager & TelemetryStore Invariants', () => {
     assert.equal(store.isEmpty(), true);
   });
 
-  it('dispatches page interactions and maps invalid/missing targets to SpectorError', async () => {
-    const fakePage: any = {
-      evaluate: async () => {},
-      waitForTimeout: async () => {},
-      locator: (sel: string) => ({
-        first: () => ({
-          waitFor: async () => {
-            if (sel === '.missing') throw new Error('timeout');
-          },
-          click: async () => {},
-          hover: async () => {},
-          evaluate: async () => {}
-        })
-      })
-    };
-
-    const msg = await dispatchPageInteraction(fakePage, { action: 'click', selector: '.w-[200px]' });
-    assert.match(msg, /Clicked element/);
-
-    const scrollMsg = await dispatchPageInteraction(fakePage, { action: 'scroll', scrollDelta: { x: 20 } });
-    assert.match(scrollMsg, /Scrolled page by x=20, y=0/);
-
-    await assert.rejects(
-      () => dispatchPageInteraction(fakePage, { action: 'click' }),
-      (err: unknown) => err instanceof SpectorError && err.code === 'INVALID_TOOL_INPUT'
-    );
-    await assert.rejects(
-      () => dispatchPageInteraction(fakePage, { action: 'unknown' as any }),
-      (err: unknown) => err instanceof SpectorError && err.code === 'INVALID_TOOL_INPUT'
-    );
-    await assert.rejects(
-      () => dispatchPageInteraction(fakePage, { action: 'hover', selector: '.missing' }),
-      (err: unknown) => err instanceof SpectorError && err.code === 'ELEMENT_NOT_READY'
-    );
-  });
-
   it('serializes concurrent withBreakpointMetrics calls and always clears CDP metrics override', async () => {
     const events: string[] = [];
     const manager = new CdpSessionManager();
@@ -299,5 +263,99 @@ describe('CdpSessionManager & TelemetryStore Invariants', () => {
     failCleanup = false;
     assert.deepEqual(await manager.withBreakpointMetrics(['tablet'], async () => 'recovered'), ['recovered']);
     assert.equal(detachCount, 2);
+  });
+
+  it('uses authoritative CDP Target.getTargetInfo in listTabs/selectTab when Playwright mainFrame is hijacked by an OOPIF', async () => {
+    const manager = new CdpSessionManager();
+    const makePage = (pwUrl: string, pwTitle: string, cdpInfo: { targetId: string; type: string; title: string; url: string }) => {
+      const cdp = {
+        send: async (method: string) => method === 'Target.getTargetInfo' ? { targetInfo: cdpInfo } : {},
+        detach: async () => {}
+      };
+      return {
+        url: () => pwUrl,
+        title: async () => pwTitle,
+        isClosed: () => false,
+        viewportSize: () => null,
+        bringToFront: async () => {},
+        on: () => {},
+        off: () => {},
+        exposeFunction: async () => {},
+        addInitScript: async () => {},
+        evaluate: async () => {},
+        context: () => ({ newCDPSession: async () => cdp })
+      } as any;
+    };
+
+    const hijackedPage = makePage(
+      'https://calendar.google.com/calendar/appointments/schedules/abc',
+      'Book Meeting',
+      { targetId: 'page-1', type: 'page', title: 'About', url: 'https://www.binar.co.id/about' }
+    );
+    const leakedIframe = makePage(
+      'https://calendar.google.com/calendar/appointments/schedules/abc',
+      'Book Meeting',
+      { targetId: 'iframe-1', type: 'iframe', title: 'Book Meeting', url: 'https://calendar.google.com/calendar/appointments/schedules/abc' }
+    );
+
+    manager.browser = { isConnected: () => true, close: async () => {} } as any;
+    manager.context = { pages: () => [hijackedPage, leakedIframe] } as any;
+    manager.page = hijackedPage;
+
+    const tabs = await manager.listTabs();
+    assert.equal(tabs.length, 1);
+    assert.equal(tabs[0].title, 'About');
+    assert.equal(tabs[0].url, 'https://www.binar.co.id/about');
+    assert.equal(tabs[0].isActive, true);
+
+    const selected = await manager.selectTab({ url: '*binar.co.id*' });
+    assert.equal(selected.title, 'About');
+    assert.equal(selected.url, 'https://www.binar.co.id/about');
+    manager.assertTarget(hijackedPage, 'https://www.binar.co.id/about');
+  });
+
+  it('falls back to CDP Runtime.evaluate in evaluateInPage when Playwright page.url() disagrees with CDP targetInfo', async () => {
+    let pwEvalCalls = 0;
+    let cdpEvalCalls = 0;
+    const makeCdpPage = (pwUrl: string, cdpUrl: string) => {
+      const cdp = {
+        send: async (method: string, params?: any) => {
+          if (method === 'Target.getTargetInfo') {
+            return { targetInfo: { targetId: 'p1', type: 'page', title: 'About', url: cdpUrl } };
+          }
+          if (method === 'Runtime.evaluate') {
+            cdpEvalCalls++;
+            assert.equal(params.returnByValue, true);
+            assert.equal(params.awaitPromise, true);
+            return { result: { value: { source: 'cdp', exprLen: params.expression.length } } };
+          }
+          return {};
+        },
+        detach: async () => {}
+      };
+      return {
+        url: () => pwUrl,
+        evaluate: async () => { pwEvalCalls++; return { source: 'playwright' }; },
+        context: () => ({ newCDPSession: async () => cdp })
+      } as any;
+    };
+
+    const healthyPage = makeCdpPage('https://www.binar.co.id/about', 'https://www.binar.co.id/about');
+    const healthyRes = await evaluateInPage(healthyPage, () => ({ ok: true }));
+    assert.deepEqual(healthyRes, { source: 'playwright' });
+    assert.equal(pwEvalCalls, 1);
+    assert.equal(cdpEvalCalls, 0);
+
+    const corruptedPage = makeCdpPage('https://calendar.google.com/embed', 'https://www.binar.co.id/about');
+    setMainFrameCorrupted(corruptedPage, true);
+    const corruptedRes = await evaluateInPage(corruptedPage, (n: number) => ({ n }), 42);
+    assert.equal((corruptedRes as any).source, 'cdp');
+    assert.equal(pwEvalCalls, 1);
+    assert.equal(cdpEvalCalls, 1);
+
+    const emptyUrlPage = makeCdpPage('', 'https://www.binar.co.id/about');
+    const emptyUrlRes = await evaluateInPage(emptyUrlPage, () => ({ ok: true }));
+    assert.equal((emptyUrlRes as any).source, 'cdp');
+    assert.equal(cdpEvalCalls, 2);
   });
 });

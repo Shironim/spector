@@ -1,10 +1,9 @@
 import { expect, test } from 'bun:test';
 import { BrowserOperationEngine } from '../../src/browser/operation-engine.js';
 import type { Page } from 'playwright-core';
-import type { ActivityIndicator } from '../../src/browser/activity-indicator.js';
 
 const page = () => ({url:()=> 'http://fixture.test/',on:()=>{},off:()=>{}}) as unknown as Page;
-const engine = () => new BrowserOperationEngine({run:async (_: Page, fn:()=>Promise<unknown>)=>fn()} as ActivityIndicator,()=>{});
+const engine = () => new BrowserOperationEngine(()=>{});
 
 test('nested collectors reuse ownership and failed operations release the queue', async () => {
   const e = engine(); const p = page();

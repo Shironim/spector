@@ -53,10 +53,14 @@ function buildPickedResponse(pins: PickedElementInfo[], comparison?: unknown, in
 export function registerPickerTools(server: McpServer, manager: CdpSessionManager): void {
   const pickerSchema = {
     action: z
-      .enum(['get', 'pick', 'clear'])
+      .enum(['get', 'pick', 'verify', 'clear'])
       .optional()
       .default('get')
-      .describe('"get" retrieves Alt+P pinned blueprint(s)/comparison; "pick" launches interactive overlay to select element/region; "clear" empties pin queue (default: "get")'),
+      .describe('"get" retrieves Alt+P pinned blueprint(s)/comparison; "pick" launches interactive overlay; "verify" re-checks a pinned selector after code edits and returns Before vs After rect/style/forensics deltas; "clear" empties pin queue (default: "get")'),
+    pinId: z
+      .string()
+      .optional()
+      .describe('Optional pin ID to verify when action is "verify" (defaults to latest Target/Single element pin)'),
     includeScreenshot: z
       .boolean()
       .optional()
@@ -81,30 +85,40 @@ export function registerPickerTools(server: McpServer, manager: CdpSessionManage
       .number()
       .optional()
       .default(TIMEOUTS.PICKER_HOTKEY_DEFAULT_MS)
-      .describe('Timeout in milliseconds waiting for developer click/drag when action is "pick" (default: 30000)'),
+      .describe('Timeout in milliseconds waiting for developer selection when action is "pick" (default: 30000)'),
     includeStyles: z
       .boolean()
       .optional()
       .default(true)
-      .describe('Extract full typography, layout, surface styles, subtree summary, and SVG/image asset metadata when action is "pick" (default: true)'),
+      .describe('Extract typography, layout, surface styles, subtree summary, and SVG/image asset metadata when action is "pick" (default: true)'),
     role: z
       .enum(['single', 'target', 'reference', 'pin'])
       .optional()
       .default('single')
-      .describe('Pin slot role when action is "pick": "single" (immediate), "target" (project A), "reference" (reference B), or "pin" (multi-pin queue)'),
+      .describe('Initial pin slot role when action is "pick": "single", "target" (project A), "reference" (ref B), or "pin" (multi-pin queue)'),
     selectionMode: z
       .enum(['element', 'region'])
       .optional()
       .default('element')
-      .describe('Initial selection mode when action is "pick": "element" click or "region" marquee drag box (default: "element")')
+      .describe('Initial selection hint when action is "pick" (overlay supports both click-element and drag-region automatically)')
   };
 
-  server.tool(
+  server.registerTool(
     'spector_picker',
-    '[DESIGN BLUEPRINT PICKER & A/B COMPARE] Retrieves Design Blueprint(s) pinned via Alt+P (action: "get"), launches the interactive overlay (action: "pick" for Element, Region Drag, Quick Note, Target/Reference A/B compare, or Multi-Pin Queue), or clears the pin queue (action: "clear").',
-    pickerSchema,
+    {
+      title: 'Visual Pin Picker, A/B Compare & Before/After Verify',
+      description: '[HUMAN-TO-AI VISUAL PICKER & VERIFIER] Retrieves Alt+P pinned Design Blueprint(s) with auto-forensics (action: "get"), launches the point-then-annotate overlay (action: "pick"), verifies Before vs After diffs on a pinned element after code edits (action: "verify"), or clears the pin queue (action: "clear").',
+      inputSchema: pickerSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: false,
+        openWorldHint: false
+      }
+    },
     instrumentHandler<{
-      action?: 'get' | 'pick' | 'clear';
+      action?: 'get' | 'pick' | 'verify' | 'clear';
+      pinId?: string;
       includeScreenshot?: boolean;
       clearAfterRead?: boolean;
       includeHoverState?: boolean;
@@ -115,6 +129,7 @@ export function registerPickerTools(server: McpServer, manager: CdpSessionManage
       selectionMode?: PinSelectionMode;
     }>('spector_picker', async ({
       action,
+      pinId,
       includeScreenshot,
       clearAfterRead,
       includeHoverState,
@@ -127,6 +142,24 @@ export function registerPickerTools(server: McpServer, manager: CdpSessionManage
       if (action === 'clear') {
         const cleared = manager.clearPins();
         return envelopeResponse(true, `Cleared ${cleared} pinned item(s) from Spector queue.`, { cleared });
+      }
+
+      if (action === 'verify') {
+        const verified = await manager.verifyPin({
+          pinId,
+          includeScreenshot: includeScreenshot ?? true
+        });
+        const content: McpToolContent[] = [
+          { type: 'text', text: JSON.stringify(verified.report, null, 2) }
+        ];
+        if (includeScreenshot !== false && verified.screenshotBase64) {
+          content.push({
+            type: 'image',
+            data: verified.screenshotBase64,
+            mimeType: 'image/png'
+          });
+        }
+        return enforceResponseBudget({ content });
       }
 
       if (action === 'pick') {

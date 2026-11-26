@@ -6,7 +6,7 @@ import type { PinStore } from './pin-store.js';
 import type { RenderCapture } from './render-capture.js';
 import { extractCompressedDom } from '../analyzers/dom-compressor.js';
 import { extractPseudoStateDelta } from '../analyzers/cdp-styles.js';
-import { enrichFrameworkComponent } from '../utils/framework-detector.js';
+import { collectPinForensics } from '../analyzers/pin-forensics.js';
 import { escapeTailwindSelector } from '../utils/selector.js';
 import { SpectorError } from '../utils/mcp-response.js';
 import { logger } from '../utils/logger.js';
@@ -25,7 +25,7 @@ export class PickerEvidence {
   public async collect(
     page: Page,
     raw: BrowserPickedPin,
-    options: { includeScreenshot: boolean; includeHoverState: boolean }
+    options: { includeScreenshot: boolean; includeHoverState: boolean; includeForensics?: boolean }
   ): Promise<PickedElementInfo> {
     const documentId = this.documents.id(page);
     const elementId = raw.selector && raw.pinMode !== 'region'
@@ -52,7 +52,6 @@ export class PickerEvidence {
       status: 'selected',
       selector: raw.selector,
       tagName: raw.tagName,
-      frameworkComponent: enrichFrameworkComponent(raw.frameworkComponent),
       rect: raw.rect,
       computedStyles: raw.computedStyles,
       subtreeSummary: raw.subtreeSummary,
@@ -71,6 +70,15 @@ export class PickerEvidence {
         picked.sections.dom = { status: 'captured' };
       } catch (err: unknown) {
         logger.warn('picker_dom_compression_fallback', { selector: raw.selector, error: err instanceof Error ? err.message : String(err) });
+      }
+
+      if (options.includeForensics !== false) {
+        try {
+          const forensics = await collectPinForensics(page, raw.selector, this.remainingTime(TIMEOUTS.CDP_CONNECT_MS));
+          if (forensics) picked.forensics = forensics;
+        } catch (err: unknown) {
+          logger.warn('picker_forensics_fallback', { selector: raw.selector, error: err instanceof Error ? err.message : String(err) });
+        }
       }
     }
 
@@ -128,6 +136,9 @@ export class PickerEvidence {
     for (const pin of pins) {
       for (const kind of ['hover', 'focus'] as const) {
         if (!(kind === 'hover' ? options.includeHoverState : options.includeFocusState)) continue;
+        // Other-tab pins remain historical snapshots; only enrich the active target.
+        if (pin.targetId && pin.targetId !== this.targetId(page)) continue;
+        if (kind === 'hover') delete pin.hoverState; else delete pin.focusState;
         pin.enrichment ??= {};
         if (!pin.documentId || pin.documentId !== documentId || pin.targetId !== this.targetId(page)) {
           pin.enrichment[kind] = { status: 'stale' }; continue;

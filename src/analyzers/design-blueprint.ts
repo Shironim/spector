@@ -1,13 +1,11 @@
 import type { ComparisonDiff, PickedElementInfo } from '../types.js';
 import { TOKEN_BUDGETS } from '../constants.js';
 import { IN_BROWSER_SANITIZE_PATH_FN } from '../utils/selector.js';
-import { ANIMATION_LIMITS, IN_BROWSER_ANIMATION_EXTRACTOR_FN } from './animation-forensics.js';
 
 export const IN_BROWSER_BLUEPRINT_EXTRACTOR_FN = `
 function extractDesignBlueprint(target, includeStyles, maxSubtreeElements, maxInlineSvgBytes) {
   const rect = target.getBoundingClientRect();
   ${IN_BROWSER_SANITIZE_PATH_FN}
-  ${IN_BROWSER_ANIMATION_EXTRACTOR_FN}
 
   let computedStyles = undefined;
   if (includeStyles) {
@@ -212,10 +210,6 @@ function extractDesignBlueprint(target, includeStyles, maxSubtreeElements, maxIn
       }
     : undefined;
 
-  const animations = includeStyles
-    ? extractAnimationsForTarget(target, ${ANIMATION_LIMITS.MAX_PICKER_ANIMATIONS}, false)
-    : [];
-
   return {
     rect: {
       x: Math.round(rect.x),
@@ -225,8 +219,7 @@ function extractDesignBlueprint(target, includeStyles, maxSubtreeElements, maxIn
     },
     computedStyles,
     subtreeSummary,
-    assets,
-    ...(animations.length > 0 ? { animations } : {})
+    assets
   };
 }
 `;
@@ -257,7 +250,9 @@ export function computeComparisonDiff(
   let hoverDiffs: Record<string, { target?: string; reference?: string }> | undefined;
   const tHover = target.hoverState?.changes;
   const rHover = reference.hoverState?.changes;
-  if (tHover || rHover) {
+  const usableHover = (pin: PickedElementInfo) =>
+    !pin.enrichment?.hover || pin.enrichment.hover.status === 'captured';
+  if ((tHover || rHover) && usableHover(target) && usableHover(reference)) {
     const diffs: Record<string, { target?: string; reference?: string }> = {};
     const hoverKeys = new Set([...Object.keys(tHover || {}), ...Object.keys(rHover || {})]);
     for (const key of hoverKeys) {

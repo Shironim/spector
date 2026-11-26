@@ -5,12 +5,12 @@ import { TelemetryStore } from '../../src/browser/telemetry-store.js';
 
 test('diagnostic response budget failure does not drain logs',async()=>{
  const manager=new CdpSessionManager();let large=true;
- const page={url:()=> 'http://fixture.test/',viewportSize:()=>null,evaluate:async()=>({horizontalOverflow:{hasOverflow:false,scrollWidth:100,clientWidth:100,culprits:[]},clippingTraps:[],stackingTraps:[],brokenMedia:[],fontIssues:large?[{family:'x'.repeat(13*1024*1024),status:'error',weight:'400'}]:[]})};
+ const page={url:()=> 'http://fixture.test/',viewportSize:()=>null,context:()=>({newCDPSession:async()=>({send:async()=>({nodes:[]}),detach:async()=>{}})}),evaluate:async()=>({horizontalOverflow:{hasOverflow:false,scrollWidth:100,clientWidth:100,culprits:[]},clippingTraps:[],stackingTraps:[],brokenMedia:[],fontIssues:large?[{family:'x'.repeat(13*1024*1024),status:'error',weight:'400'}]:[],candidates:[],unverifiable:0})};
  manager.ensurePage=async()=>page as any;manager.captureMetadata=async()=>({} as any);manager.assertTarget=()=>{};
  manager.runBrowserOperation=(async(fn:()=>Promise<unknown>)=>fn()) as any;
- manager.telemetry.addConsole('error','retained evidence');
+ manager.telemetry.addConsole('error','retained evidence',undefined,manager.targetId(page as any));
  let handler!:Function;
- registerDiagnoseTool({tool:(_name:string,_description:string,_schema:unknown,fn:Function)=>{handler=fn;}} as any,manager);
+ registerDiagnoseTool({registerTool:(_name:string,_config:unknown,fn:Function)=>{handler=fn;}} as any,manager);
  const rejected=await handler({});expect(rejected.isError).toBe(true);
  expect(JSON.stringify(rejected)).toContain('RESOURCE_LIMIT_EXCEEDED');
  expect(manager.telemetry.getConsoleLogs('error',false)).toHaveLength(1);

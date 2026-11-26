@@ -41,11 +41,19 @@ export class TelemetryStore {
   private failedNetworkLogs: NetworkLogEntry[] = [];
   private networkLogSequence = 0;
 
-  private appendConsoleEntry(type: string, text: string, location?: string): void {
+  private appendConsoleEntry(type: string, text: string, location?: string, targetId?: string): void {
     const cleanLocation = sanitizeConsoleLocation(location);
     const last = this.consoleLogs[this.consoleLogs.length - 1];
     const truncated = text.length > TELEMETRY_LIMITS.MAX_CONSOLE_TEXT_CHARS;
-    if (last && !last.textTruncated && !truncated && last.type === type && last.text === text && last.location === cleanLocation) {
+    if (
+      last &&
+      !last.textTruncated &&
+      !truncated &&
+      last.type === type &&
+      last.text === text &&
+      last.location === cleanLocation &&
+      last.targetId === targetId
+    ) {
       last.count = (last.count || 1) + 1;
       last.timestamp = new Date().toISOString();
       return;
@@ -57,6 +65,7 @@ export class TelemetryStore {
       ...(truncated ? { textTruncated: true, originalTextLength: text.length } : {}),
       timestamp: new Date().toISOString(),
       ...(cleanLocation ? { location: cleanLocation } : {}),
+      ...(targetId ? { targetId } : {}),
       count: 1
     });
 
@@ -65,13 +74,13 @@ export class TelemetryStore {
     }
   }
 
-  public addConsole(type: string, text: string, location?: string): void {
-    this.appendConsoleEntry(type, text, location);
+  public addConsole(type: string, text: string, location?: string, targetId?: string): void {
+    this.appendConsoleEntry(type, text, location, targetId);
   }
 
-  public addPageError(message: string, stack?: string): void {
+  public addPageError(message: string, stack?: string, targetId?: string): void {
     const text = `Uncaught Exception: ${message}${stack ? `\n${stack}` : ''}`;
-    this.appendConsoleEntry('error', text);
+    this.appendConsoleEntry('error', text, undefined, targetId);
   }
 
   /**
@@ -85,6 +94,7 @@ export class TelemetryStore {
     statusText?: string;
     durationMs?: number;
     error?: string;
+    targetId?: string;
   }): NetworkLogEntry | null {
     const isFailure = input.error !== undefined || (input.status !== undefined && input.status >= 400);
     if (!isFailure) return null;
@@ -98,6 +108,7 @@ export class TelemetryStore {
       ...(input.statusText ? { statusText: input.statusText } : {}),
       ...(input.durationMs !== undefined ? { durationMs: input.durationMs } : {}),
       timestamp: new Date().toISOString(),
+      ...(input.targetId ? { targetId: input.targetId } : {}),
       ...(input.error ? { error: input.error } : {})
     };
 
@@ -111,9 +122,13 @@ export class TelemetryStore {
   public getConsoleLogs(
     level: 'all' | 'error' | 'warn' = 'error',
     clearAfterRead: boolean = true,
-    limit: number = TELEMETRY_LIMITS.CONSOLE_LOG_DEFAULT_LIMIT
+    limit: number = TELEMETRY_LIMITS.CONSOLE_LOG_DEFAULT_LIMIT,
+    targetId?: string
   ): ConsoleLogEntry[] {
     let result = [...this.consoleLogs];
+    if (targetId) {
+      result = result.filter(log => log.targetId === targetId);
+    }
     if (level === 'error') {
       result = result.filter(log => log.type === 'error');
     } else if (level === 'warn') {
@@ -134,9 +149,13 @@ export class TelemetryStore {
   public getFailedNetworkLogs(
     clearAfterRead: boolean = true,
     limit: number = TELEMETRY_LIMITS.NETWORK_LOG_DEFAULT_LIMIT,
-    pathnameFilter?: string
+    pathnameFilter?: string,
+    targetId?: string
   ): NetworkLogEntry[] {
     let result = [...this.failedNetworkLogs];
+    if (targetId) {
+      result = result.filter(log => log.targetId === targetId);
+    }
 
     if (pathnameFilter) {
       const needle = pathnameFilter.toLowerCase();

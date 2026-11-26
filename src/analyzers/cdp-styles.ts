@@ -32,12 +32,18 @@ const DEFAULT_CASCADE_PROPERTIES = [
   'padding-bottom',
   'padding-left',
   'margin',
+  'gap',
+  'grid-template-columns',
   'overflow',
   'color',
   'background-color',
+  'border-radius',
+  'box-shadow',
+  'transform',
   'font-family',
   'font-size',
   'font-weight',
+  'line-height',
   'flex-direction',
   'justify-content',
   'align-items',
@@ -164,6 +170,137 @@ interface CascadeDeclaration {
   layerOrder: number;
 }
 
+async function buildLayerOrderMap(cdp: CDPSession, nodeId: number, rules: any[]): Promise<Map<string, number>> {
+  const layerOrders = new Map<string, number>();
+  if (!rules?.some((entry: any) => entry.rule?.layers?.length)) {
+    return layerOrders;
+  }
+  const { rootLayer } = await cdp.send('CSS.getLayersForNode', { nodeId });
+  const visit = (layer: { name: string; order: number; subLayers?: any[] }, parent: string) => {
+    const path = parent ? `${parent}.${layer.name}` : layer.name;
+    layerOrders.set(path, layer.order);
+    for (const child of layer.subLayers || []) visit(child, path);
+  };
+  for (const layer of rootLayer.subLayers || []) visit(layer, '');
+  return layerOrders;
+}
+
+// CDP may supply both authored and expanded copies of the same declaration.
+function dedupeStyleDeclarations(style: any): any[] {
+  const seen = new Set<string>();
+  return [...(style?.cssProperties || [])].reverse().filter(prop => {
+    if (!prop.name || !prop.value || prop.disabled || prop.parsedOk === false) return false;
+    const key = `${prop.name.toLowerCase()}|${prop.value.replace(/\s*!important\s*$/i, '').trim()}|${Boolean(prop.important)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).reverse();
+}
+
+function collectMatchedDeclarations(
+  matchedCSSRules: any[] | undefined,
+  trackedSet: Set<string>,
+  layerOrders: Map<string, number>,
+  inlineStyle?: any
+): Map<string, CascadeDeclaration[]> {
+  const byProp = new Map<string, CascadeDeclaration[]>();
+  let order = 0;
+
+  const pushDecl = (propName: string, value: string, source: string, important: boolean, isInline: boolean, layerOrder: number) => {
+    const name = propName.toLowerCase();
+    if (!trackedSet.has(name)) return;
+    const list = byProp.get(name) || [];
+    list.push({ value, source, important, isInline, order: ++order, layerOrder });
+    byProp.set(name, list);
+  };
+
+  for (const entry of matchedCSSRules || []) {
+    const rule = entry.rule;
+    if (!rule || rule.origin === 'user-agent') continue;
+    if (rule.supports?.some((condition: any) => condition.active === false)) continue;
+    if (rule.media?.some((media: any) => media.mediaList?.length && !media.mediaList.some((query: any) => query.active))) continue;
+    const selectorText = rule.selectorList?.text || '(rule)';
+    const originTag = rule.origin && rule.origin !== 'regular' ? ` [${rule.origin}]` : '';
+    const layerNames = (rule.layers || []).map((layer: any) => layer.text);
+    const forwardPath = layerNames.join('.');
+    const reversePath = [...layerNames].reverse().join('.');
+    const layerPath = layerOrders.has(forwardPath) ? forwardPath : reversePath;
+    const layerOrder = layerPath ? layerOrders.get(layerPath) : Number.POSITIVE_INFINITY;
+    if (layerOrder === undefined) {
+      throw new Error(`Cannot determine CSS layer order for ${layerPath}.`);
+    }
+    const sourceLabel = `${selectorText}${originTag}${layerPath ? ` [layer: ${layerPath}]` : ''}`;
+    for (const prop of dedupeStyleDeclarations(rule.style)) {
+      pushDecl(prop.name, prop.value, sourceLabel, Boolean(prop.important), false, layerOrder);
+    }
+  }
+
+  if (inlineStyle?.cssProperties) {
+    for (const prop of dedupeStyleDeclarations(inlineStyle)) {
+      pushDecl(prop.name, prop.value, 'element.style (inline)', Boolean(prop.important), true, Number.POSITIVE_INFINITY);
+    }
+  }
+
+  return byProp;
+}
+
+function rankDeclarationsByProperty(
+  byProp: Map<string, CascadeDeclaration[]>,
+  computedValues?: Map<string, string>
+): Record<string, CssCascadeEntry> {
+  const resultProps: Record<string, CssCascadeEntry> = {};
+
+  for (const [propName, candidates] of byProp.entries()) {
+    if (candidates.length === 0) continue;
+
+    const sorted = [...candidates].sort((a, b) => {
+      if (a.important !== b.important) return a.important ? -1 : 1;
+      if (a.isInline !== b.isInline) return a.isInline ? -1 : 1;
+      if (a.layerOrder !== b.layerOrder) {
+        // Important declarations reverse layer priority, including the implicit unlayered scope.
+        return a.important ? a.layerOrder - b.layerOrder : b.layerOrder - a.layerOrder;
+      }
+      return b.order - a.order;
+    });
+
+    const winner = sorted[0];
+    const computedValue = computedValues?.get(propName);
+    if (/^(revert|revert-layer)\s*(?:!important)?$/i.test(winner.value.trim())) {
+      resultProps[propName] = {
+        resolution: 'partial',
+        ...(computedValue !== undefined ? { computedValue } : {}),
+        limitation: 'Cascade rollback provenance is not resolved; computedValue is observed from Chrome.',
+        authoredDeclarations: sorted.map(({ value, source, important }) => ({ value, source, important })),
+        overridden: []
+      };
+      continue;
+    }
+
+    const overridden = sorted.slice(1).map((loser) => {
+      let reason = 'lower specificity or earlier rule order';
+      if (winner.important && !loser.important) {
+        reason = 'overridden by !important';
+      } else if (winner.isInline && !loser.isInline) {
+        reason = 'overridden by inline style';
+      } else if (winner.layerOrder !== loser.layerOrder) {
+        reason = winner.important ? 'overridden by earlier important cascade layer' : 'overridden by higher cascade layer';
+      }
+      return { value: loser.value, source: loser.source, reason };
+    });
+
+    resultProps[propName] = {
+      resolution: 'ranked',
+      ...(computedValue !== undefined ? { computedValue } : {}),
+      winningValue: winner.value,
+      winningSource: winner.source,
+      ...(winner.important ? { important: true } : {}),
+      overridden
+    };
+  }
+
+  return resultProps;
+}
+
 export async function explainCssCascade(
   page: Page,
   selector: string,
@@ -182,109 +319,35 @@ export async function explainCssCascade(
     }
 
     const matched: any = await cdp.send('CSS.getMatchedStylesForNode', { nodeId });
-    const layerOrders = new Map<string, number>();
-    if (matched.matchedCSSRules?.some((entry: any) => entry.rule?.layers?.length)) {
-      const { rootLayer } = await cdp.send('CSS.getLayersForNode', { nodeId });
-      const visit = (layer: { name: string; order: number; subLayers?: any[] }, parent: string) => {
-        const path = parent ? `${parent}.${layer.name}` : layer.name;
-        layerOrders.set(path, layer.order);
-        for (const child of layer.subLayers || []) visit(child, path);
-      };
-      for (const layer of rootLayer.subLayers || []) visit(layer, '');
-    }
-    const byProp = new Map<string, CascadeDeclaration[]>();
-    let order = 0;
+    const computed = await cdp.send('CSS.getComputedStyleForNode', { nodeId });
+    const computedValues = new Map<string, string>(
+      (computed.computedStyle || []).map((property: { name: string; value: string }) => [property.name, property.value])
+    );
 
-    const pushDecl = (propName: string, value: string, source: string, important: boolean, isInline: boolean, layerOrder: number) => {
-      const name = propName.toLowerCase();
-      if (!trackedSet.has(name)) return;
-      const list = byProp.get(name) || [];
-      list.push({ value, source, important, isInline, order: ++order, layerOrder });
-      byProp.set(name, list);
-    };
+    const allRules = [
+      ...(matched.matchedCSSRules || []),
+      ...((matched.pseudoElements || []).flatMap((pe: any) => pe.matches || []))
+    ];
+    const layerOrders = await buildLayerOrderMap(cdp, nodeId, allRules);
 
-    // CDP may supply both authored and expanded copies of the same declaration.
-    const declarations = (style: any): any[] => {
-      const seen = new Set<string>();
-      return [...(style?.cssProperties || [])].reverse().filter(prop => {
-        if (!prop.name || !prop.value || prop.disabled || prop.parsedOk === false) return false;
-        const key = `${prop.name.toLowerCase()}|${prop.value.replace(/\s*!important\s*$/i, '').trim()}|${Boolean(prop.important)}`;
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      }).reverse();
-    };
+    const byProp = collectMatchedDeclarations(matched.matchedCSSRules, trackedSet, layerOrders, matched.inlineStyle);
+    const resultProps = rankDeclarationsByProperty(byProp, computedValues);
 
-    for (const entry of matched.matchedCSSRules || []) {
-      const rule = entry.rule;
-      if (!rule || rule.origin === 'user-agent') continue;
-      if (rule.supports?.some((condition: any) => condition.active === false)) continue;
-      if (rule.media?.some((media: any) => media.mediaList?.length && !media.mediaList.some((query: any) => query.active))) continue;
-      const selectorText = rule.selectorList?.text || '(rule)';
-      const originTag = rule.origin && rule.origin !== 'regular' ? ` [${rule.origin}]` : '';
-      const layerNames = (rule.layers || []).map((layer: any) => layer.text);
-      const forwardPath = layerNames.join('.');
-      const reversePath = [...layerNames].reverse().join('.');
-      const layerPath = layerOrders.has(forwardPath) ? forwardPath : reversePath;
-      const layerOrder = layerPath ? layerOrders.get(layerPath) : Number.POSITIVE_INFINITY;
-      if (layerOrder === undefined) {
-        throw new Error(`Cannot determine CSS layer order for ${layerPath}.`);
+    const pseudoElements: NonNullable<CssCascadeReport['pseudoElements']> = {};
+    for (const pseudoEntry of matched.pseudoElements || []) {
+      const pseudoType = pseudoEntry.pseudoType;
+      if (pseudoType !== 'before' && pseudoType !== 'after') continue;
+      const pseudoByProp = collectMatchedDeclarations(pseudoEntry.matches, trackedSet, layerOrders);
+      const ranked = rankDeclarationsByProperty(pseudoByProp);
+      if (Object.keys(ranked).length > 0) {
+        pseudoElements[pseudoType as 'before' | 'after'] = ranked;
       }
-      const sourceLabel = `${selectorText}${originTag}${layerPath ? ` [layer: ${layerPath}]` : ''}`;
-      for (const prop of declarations(rule.style)) {
-        pushDecl(prop.name, prop.value, sourceLabel, Boolean(prop.important), false, layerOrder);
-      }
-    }
-
-    if (matched.inlineStyle?.cssProperties) {
-      for (const prop of declarations(matched.inlineStyle)) {
-        pushDecl(prop.name, prop.value, 'element.style (inline)', Boolean(prop.important), true, Number.POSITIVE_INFINITY);
-      }
-    }
-
-    const resultProps: Record<string, CssCascadeEntry> = {};
-
-    for (const [propName, candidates] of byProp.entries()) {
-      if (candidates.length === 0) continue;
-
-      const sorted = [...candidates].sort((a, b) => {
-        if (a.important !== b.important) return a.important ? -1 : 1;
-        if (a.isInline !== b.isInline) return a.isInline ? -1 : 1;
-        if (a.layerOrder !== b.layerOrder) {
-          // Important declarations reverse layer priority, including the implicit unlayered scope.
-          return a.important ? a.layerOrder - b.layerOrder : b.layerOrder - a.layerOrder;
-        }
-        return b.order - a.order;
-      });
-
-      const winner = sorted[0];
-      const overridden = sorted.slice(1).map((loser) => {
-        let reason = 'lower specificity or earlier rule order';
-        if (winner.important && !loser.important) {
-          reason = 'overridden by !important';
-        } else if (winner.isInline && !loser.isInline) {
-          reason = 'overridden by inline style';
-        } else if (winner.layerOrder !== loser.layerOrder) {
-          reason = winner.important ? 'overridden by earlier important cascade layer' : 'overridden by higher cascade layer';
-        }
-        return {
-          value: loser.value,
-          source: loser.source,
-          reason
-        };
-      });
-
-      resultProps[propName] = {
-        winningValue: winner.value,
-        winningSource: winner.source,
-        ...(winner.important ? { important: true } : {}),
-        overridden
-      };
     }
 
     return {
       selector,
-      properties: resultProps
+      properties: resultProps,
+      ...(Object.keys(pseudoElements).length > 0 ? { pseudoElements } : {})
     };
   });
 }

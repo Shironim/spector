@@ -1,6 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { Frame, Page } from 'playwright-core';
-import type { ActivityIndicator } from './activity-indicator.js';
 import { TIMEOUTS, TOKEN_BUDGETS } from '../constants.js';
 import { SpectorError } from '../utils/mcp-response.js';
 
@@ -12,8 +11,8 @@ export class BrowserOperationEngine {
   private context = new AsyncLocalStorage<OperationContext>();
 
   public constructor(
-    private readonly activity: ActivityIndicator,
-    private readonly validate: (page: Page, url: string, navigated: boolean) => void
+    private readonly validate: (page: Page, url: string, navigated: boolean) => void,
+    private readonly readUrl: (page: Page) => string = page => page.url()
   ) {}
 
   public get currentPage(): Page | undefined {
@@ -38,7 +37,7 @@ export class BrowserOperationEngine {
     return context?.active ? Math.max(1, Math.min(localLimit, context.deadline - performance.now())) : localLimit;
   }
 
-  public async run<T>(page: Page, operation: () => Promise<T>, options: { allowNavigation?: boolean; activity?: boolean; timeoutMs?: number } = {}): Promise<T> {
+  public async run<T>(page: Page, operation: () => Promise<T>, options: { allowNavigation?: boolean; timeoutMs?: number } = {}): Promise<T> {
     if (this.currentPage === page) return operation();
     const timeoutMs = options.timeoutMs ?? TIMEOUTS.OPERATION_DEFAULT_MS;
     if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) throw new SpectorError('INVALID_TOOL_INPUT', 'Operation deadline must be finite and positive.');
@@ -60,7 +59,7 @@ export class BrowserOperationEngine {
         if (!started) page.off('framenavigated', onNavigation);
       }, timeoutMs);
     });
-    const url = page.url();
+    const url = this.readUrl(page);
     let navigated = false;
     const onNavigation = (frame: Frame) => { if (frame === page.mainFrame()) navigated = true; };
     page.on('framenavigated', onNavigation);
@@ -71,9 +70,9 @@ export class BrowserOperationEngine {
       const context = { page, active: true, controller, deadline };
       try {
         return await this.context.run(context, async () => {
-          const result = options.activity === false ? await operation() : await this.activity.run(page, operation);
+          const result = await operation();
           this.throwIfExpired();
-          this.validate(page, options.allowNavigation ? page.url() : url, !options.allowNavigation && navigated);
+          this.validate(page, options.allowNavigation ? this.readUrl(page) : url, !options.allowNavigation && navigated);
           return result;
         });
       } finally { context.active = false; }

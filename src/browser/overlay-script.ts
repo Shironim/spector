@@ -1,37 +1,35 @@
 import { IN_BROWSER_CSS_SELECTOR_FN } from '../utils/selector.js';
-import { IN_BROWSER_COMPONENT_DETECTOR_FN } from '../utils/framework-detector.js';
 import { BLUEPRINT_LIMITS, IN_BROWSER_BLUEPRINT_EXTRACTOR_FN } from '../analyzers/design-blueprint.js';
 import { TOKEN_BUDGETS } from '../constants.js';
 
 export const OVERLAY_ENGINE_SCRIPT = `
 (() => {
-  if (window.__spectorOverlay && window.__spectorOverlay.__version === 4) return;
+  if (window.__spectorOverlay && window.__spectorOverlay.__version === 5) return;
 
   ${IN_BROWSER_CSS_SELECTOR_FN}
-  ${IN_BROWSER_COMPONENT_DETECTOR_FN}
   ${IN_BROWSER_BLUEPRINT_EXTRACTOR_FN}
 
   const UI_PREFIX = 'data-spector-picker';
 
   const TOKENS = {
     fontUi: '-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif',
-    fontMono: 'monospace',
-    toolbarBg: 'rgba(15,23,42,0.96)',
+    fontMono: 'ui-monospace,SFMono-Regular,Menlo,monospace',
+    toolbarBg: 'rgba(15,23,42,0.95)',
     inputBg: 'rgba(30,41,59,0.95)',
     text: '#f8fafc',
-    muted: '#cbd5e1',
-    accent: '#0369a1',
+    muted: '#94a3b8',
+    accent: '#0284c7',
     accentBorder: '#38bdf8',
-    accentSoft: 'rgba(14,165,233,0.12)',
+    accentSoft: 'rgba(14,165,233,0.14)',
     warning: '#b45309',
     warningBorder: '#f59e0b',
     warningSoft: 'rgba(245,158,11,0.15)',
     success: '#047857',
     successBright: '#10b981',
-    successSoft: 'rgba(16,185,129,0.08)',
-    dangerBorder: 'rgba(248,113,113,0.4)',
+    successSoft: 'rgba(16,185,129,0.10)',
+    dangerBorder: 'rgba(248,113,113,0.45)',
     dangerText: '#fca5a5',
-    borderSubtle: 'rgba(148,163,184,0.35)',
+    borderSubtle: 'rgba(148,163,184,0.32)',
     zMarker: 2147483644,
     zHighlight: 2147483645,
     zOverlay: 2147483646,
@@ -56,7 +54,7 @@ export const OVERLAY_ENGINE_SCRIPT = `
       'z-index:' + TOKENS.zControl,
       'background:' + (isWarn ? TOKENS.warning : TOKENS.success),
       'color:#ffffff',
-      'padding:10px 18px',
+      'padding:10px 16px',
       'border-radius:10px',
       'font-family:' + TOKENS.fontUi,
       'font-size:13px',
@@ -66,10 +64,10 @@ export const OVERLAY_ENGINE_SCRIPT = `
     ].join(';');
     toast.textContent = msg;
     document.body.appendChild(toast);
-    setTimeout(() => toast.remove(), 3500);
+    setTimeout(() => toast.remove(), 3200);
   }
 
-  function createPillButton(label, titleText) {
+  function createBtn(label, titleText) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.textContent = label;
@@ -81,7 +79,7 @@ export const OVERLAY_ENGINE_SCRIPT = `
     const highlightBox = document.createElement('div');
     highlightBox.setAttribute(UI_PREFIX, 'highlight');
     highlightBox.setAttribute('aria-hidden', 'true');
-    highlightBox.style.cssText = 'position:fixed;pointer-events:none;z-index:' + TOKENS.zHighlight + ';border:2px solid ' + TOKENS.accent + ';background:' + TOKENS.accentSoft + ';border-radius:4px;display:none;box-sizing:border-box;';
+    highlightBox.style.cssText = 'position:fixed;pointer-events:none;z-index:' + TOKENS.zHighlight + ';border:2px solid ' + TOKENS.accentBorder + ';background:' + TOKENS.accentSoft + ';border-radius:4px;display:none;box-sizing:border-box;';
 
     const marqueeBox = document.createElement('div');
     marqueeBox.setAttribute(UI_PREFIX, 'marquee');
@@ -91,9 +89,17 @@ export const OVERLAY_ENGINE_SCRIPT = `
     const badge = document.createElement('div');
     badge.setAttribute(UI_PREFIX, 'badge');
     badge.setAttribute('aria-hidden', 'true');
-    badge.style.cssText = 'position:fixed;pointer-events:none;z-index:' + TOKENS.zOverlay + ';background:' + TOKENS.accent + ';color:#ffffff;font-family:' + TOKENS.fontMono + ';font-size:11px;font-weight:600;padding:3px 8px;border-radius:4px;display:none;white-space:nowrap;box-shadow:0 4px 6px -1px rgba(0,0,0,0.25);';
+    badge.style.cssText = 'position:fixed;pointer-events:none;z-index:' + TOKENS.zOverlay + ';background:' + TOKENS.toolbarBg + ';color:#ffffff;font-family:' + TOKENS.fontMono + ';font-size:11px;font-weight:600;padding:3px 8px;border-radius:5px;border:1px solid ' + TOKENS.accentBorder + ';display:none;white-space:nowrap;box-shadow:0 4px 10px rgba(0,0,0,0.28);';
 
     return { highlightBox, marqueeBox, badge };
+  }
+
+  function formatElementLabel(el, rect) {
+    const idStr = el.id ? '#' + el.id : '';
+    const classStr = el.className && typeof el.className === 'string'
+      ? '.' + el.className.trim().split(/\\s+/).filter(Boolean).slice(0, 2).join('.')
+      : '';
+    return '<' + el.tagName.toLowerCase() + idStr + classStr + '> (' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ')';
   }
 
   function startOverlay(options) {
@@ -110,28 +116,30 @@ export const OVERLAY_ENGINE_SCRIPT = `
 
     return new Promise((resolve) => {
       const state = {
-        role: opts.role || 'single',
-        mode: opts.selectionMode || 'element',
+        defaultRole: opts.role || 'single',
         hoveredTarget: null,
-        dragStart: null,
+        childStack: [],
+        pointerDown: null,
         isDragging: false,
+        pendingSelection: null,
         queuedPins: []
       };
 
       const markerEls = [];
-      const componentHintCache = new WeakMap();
       const listenerController = new AbortController();
       let timerId = null;
       let hoverRafId = 0;
       let pendingPoint = null;
+      let popoverEl = null;
+      let suppressNextClick = false;
 
-      const pillBaseStyle = 'border:1px solid ' + TOKENS.borderSubtle + ';background:transparent;color:' + TOKENS.muted + ';padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;';
-      const pillActiveStyle = 'border:1px solid ' + TOKENS.accentBorder + ';background:' + TOKENS.accent + ';color:#ffffff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;';
+      const { highlightBox, marqueeBox, badge } = createOverlayBoxes();
 
+      // Compact single-line HUD pill
       const toolbar = document.createElement('div');
       toolbar.setAttribute(UI_PREFIX, 'toolbar');
       toolbar.setAttribute('role', 'toolbar');
-      toolbar.setAttribute('aria-label', 'Spector element picker');
+      toolbar.setAttribute('aria-label', 'Spector visual picker');
       toolbar.style.cssText = [
         'position:fixed',
         'top:14px',
@@ -140,16 +148,15 @@ export const OVERLAY_ENGINE_SCRIPT = `
         'z-index:' + TOKENS.zControl,
         'background:' + TOKENS.toolbarBg,
         'color:' + TOKENS.text,
-        'padding:8px 12px',
-        'border-radius:12px',
+        'padding:7px 12px',
+        'border-radius:999px',
         'font-family:' + TOKENS.fontUi,
         'font-size:12px',
-        'box-shadow:0 12px 30px rgba(0,0,0,0.38),0 0 0 1px rgba(255,255,255,0.12)',
+        'box-shadow:0 10px 28px rgba(0,0,0,0.36),0 0 0 1px rgba(255,255,255,0.12)',
         'display:flex',
         'align-items:center',
-        'gap:8px',
-        'flex-wrap:wrap',
-        'max-width:95vw',
+        'gap:10px',
+        'max-width:92vw',
         'backdrop-filter:blur(10px)',
         'user-select:none'
       ].join(';');
@@ -158,55 +165,27 @@ export const OVERLAY_ENGINE_SCRIPT = `
       dot.setAttribute('aria-hidden', 'true');
       dot.style.cssText = 'width:8px;height:8px;border-radius:50%;background:' + TOKENS.accentBorder + ';box-shadow:0 0 8px ' + TOKENS.accentBorder + ';flex-shrink:0;';
 
-      const titleLabel = document.createElement('strong');
-      titleLabel.textContent = 'Spector';
-      titleLabel.style.cssText = 'font-size:12px;margin-right:2px;color:#fff;';
+      const hintText = document.createElement('span');
+      hintText.style.cssText = 'color:' + TOKENS.muted + ';font-size:11.5px;white-space:nowrap;';
+      hintText.textContent = 'Click element or drag area · ↑↓ parent/child';
 
-      const roleDefs = [
-        { id: 'single', label: 'Single', tip: 'Capture one element and return immediately' },
-        { id: 'target', label: 'Target (A)', tip: 'Pin local project element for A/B comparison' },
-        { id: 'reference', label: 'Ref (B)', tip: 'Pin reference design element for A/B comparison' },
-        { id: 'pin', label: 'Queue', tip: 'Pin multiple items before sending batch' }
-      ];
-      const roleButtons = {};
-      const roleGroup = document.createElement('div');
-      roleGroup.style.cssText = 'display:flex;gap:4px;align-items:center;';
+      const sendQueueBtn = createBtn('', 'Send all queued pins');
+      sendQueueBtn.style.cssText = 'display:none;border:1px solid ' + TOKENS.successBright + ';background:' + TOKENS.success + ';color:#fff;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:600;cursor:pointer;';
 
-      const modeBtn = createPillButton('Element (R)', 'Toggle Element click vs Region drag (R)');
-      const noteInput = document.createElement('input');
-      noteInput.type = 'text';
-      noteInput.maxLength = 240;
-      noteInput.placeholder = 'Note (N)...';
-      noteInput.setAttribute('aria-label', 'Quick revision note');
-      noteInput.style.cssText = 'background:' + TOKENS.inputBg + ';border:1px solid rgba(148,163,184,0.4);color:' + TOKENS.text + ';border-radius:6px;padding:4px 8px;font-size:11px;width:140px;outline-offset:2px;';
+      const cancelBtn = createBtn('Esc', 'Cancel picking (Escape)');
+      cancelBtn.style.cssText = 'border:1px solid ' + TOKENS.dangerBorder + ';background:transparent;color:' + TOKENS.dangerText + ';padding:2px 8px;border-radius:999px;font-size:11px;cursor:pointer;';
 
-      const doneBtn = createPillButton('', 'Submit queued pins (Enter)');
-      doneBtn.style.cssText = 'display:none;border:1px solid ' + TOKENS.successBright + ';background:' + TOKENS.success + ';color:#fff;padding:3px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;';
+      toolbar.appendChild(dot);
+      toolbar.appendChild(hintText);
+      toolbar.appendChild(sendQueueBtn);
+      toolbar.appendChild(cancelBtn);
 
-      const cancelBtn = createPillButton('Esc', 'Cancel picking (Escape)');
-      cancelBtn.style.cssText = 'border:1px solid ' + TOKENS.dangerBorder + ';background:transparent;color:' + TOKENS.dangerText + ';padding:3px 7px;border-radius:6px;font-size:11px;cursor:pointer;';
-
-      const { highlightBox, marqueeBox, badge } = createOverlayBoxes();
-
-      function syncUi() {
-        Object.keys(roleButtons).forEach((k) => {
-          const active = k === state.role;
-          roleButtons[k].style.cssText = active ? pillActiveStyle : pillBaseStyle;
-          roleButtons[k].setAttribute('aria-pressed', active ? 'true' : 'false');
-        });
-
-        const isRegion = state.mode === 'region';
-        modeBtn.textContent = isRegion ? 'Region (Drag)' : 'Element (R)';
-        modeBtn.setAttribute('aria-pressed', isRegion ? 'true' : 'false');
-        modeBtn.style.cssText = isRegion
-          ? 'border:1px solid ' + TOKENS.warningBorder + ';background:' + TOKENS.warning + ';color:#fff;padding:3px 8px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;'
-          : pillBaseStyle;
-
-        if (state.role === 'pin' && state.queuedPins.length > 0) {
-          doneBtn.style.display = 'inline-block';
-          doneBtn.textContent = 'Send (' + state.queuedPins.length + ')';
+      function syncHud() {
+        if (state.queuedPins.length > 0) {
+          sendQueueBtn.style.display = 'inline-block';
+          sendQueueBtn.textContent = 'Send (' + state.queuedPins.length + ')';
         } else {
-          doneBtn.style.display = 'none';
+          sendQueueBtn.style.display = 'none';
         }
       }
 
@@ -235,25 +214,24 @@ export const OVERLAY_ENGINE_SCRIPT = `
         markerEls.push(marker);
       }
 
+      function closePopover() {
+        if (popoverEl) {
+          popoverEl.remove();
+          popoverEl = null;
+        }
+        state.pendingSelection = null;
+      }
+
       function cleanup() {
         if (timerId) clearTimeout(timerId);
         if (hoverRafId) cancelAnimationFrame(hoverRafId);
         listenerController.abort();
+        closePopover();
         toolbar.remove();
         highlightBox.remove();
         marqueeBox.remove();
         badge.remove();
         markerEls.forEach((m) => m.remove());
-      }
-
-      function resolveComponentHint(target) {
-        if (!target) return undefined;
-        if (componentHintCache.has(target)) {
-          return componentHintCache.get(target);
-        }
-        const detected = detectFrameworkComponent(target) || undefined;
-        componentHintCache.set(target, detected);
-        return detected;
       }
 
       function resolveElementAt(clientX, clientY) {
@@ -262,20 +240,17 @@ export const OVERLAY_ENGINE_SCRIPT = `
         return el;
       }
 
-      function buildElementPayload(target) {
+      function buildElementPayload(target, role, note) {
         const selector = getCssSelector(target);
         const tagName = target.tagName.toLowerCase();
-        const frameworkComponent = resolveComponentHint(target);
         const blueprint = extractDesignBlueprint(target, includeStyles, maxSubtreeElements, maxInlineSvgBytes);
-        const note = noteInput.value.trim() || undefined;
         return {
           status: 'selected',
-          role: state.role,
+          role: role || 'single',
           pinMode: 'element',
           ...(note ? { note } : {}),
           selector,
           tagName,
-          frameworkComponent,
           rect: blueprint.rect,
           computedStyles: blueprint.computedStyles,
           subtreeSummary: blueprint.subtreeSummary,
@@ -283,22 +258,19 @@ export const OVERLAY_ENGINE_SCRIPT = `
         };
       }
 
-      function buildRegionPayload(regionRect) {
+      function buildRegionPayload(regionRect, role, note) {
         const cx = regionRect.x + regionRect.width / 2;
         const cy = regionRect.y + regionRect.height / 2;
         const target = resolveElementAt(cx, cy) || document.body;
         const selector = target ? getCssSelector(target) : 'body';
-        const frameworkComponent = resolveComponentHint(target);
-        const note = noteInput.value.trim() || undefined;
         const blueprint = target ? extractDesignBlueprint(target, includeStyles, maxSubtreeElements, maxInlineSvgBytes) : {};
         return {
           status: 'selected',
-          role: state.role,
+          role: role || 'single',
           pinMode: 'region',
           ...(note ? { note } : {}),
           selector,
           tagName: 'region',
-          frameworkComponent,
           rect: regionRect,
           computedStyles: blueprint.computedStyles,
           subtreeSummary: blueprint.subtreeSummary,
@@ -315,46 +287,30 @@ export const OVERLAY_ENGINE_SCRIPT = `
             return;
           }
           const label = payload.pins
-            ? 'Queued ' + payload.pins.length + ' pins to Spector AI!'
+            ? 'Sent ' + payload.pins.length + ' pins to Spector AI!'
             : payload.role === 'reference'
-              ? 'Pinned Reference (B) — switch to Target tab & Alt+P!'
+              ? 'Pinned Reference (B) — switch to Target tab & press Alt+P!'
               : payload.role === 'target'
-                ? 'Pinned Target (A) — synced to Spector AI!'
+                ? 'Pinned Target (A) — ready for A/B compare in Spector AI!'
                 : 'Captured & synced to Spector AI!';
           showToast(label, false);
         }
         resolve(payload);
       }
 
-      function submitQueue() {
-        if (state.queuedPins.length === 0) {
+      function submitQueue(extraItem) {
+        const batch = state.queuedPins.slice();
+        if (extraItem) batch.push(extraItem);
+        if (batch.length === 0) {
           cleanup();
           resolve({ status: 'cancelled' });
           return;
         }
-        const batch = state.queuedPins.slice();
         cleanup();
-        emitPayload({ status: 'selected', pins: batch });
+        emitPayload(batch.length === 1 ? batch[0] : { status: 'selected', pins: batch });
       }
 
-      function handleCapturedItem(item) {
-        if (state.role === 'pin') {
-          if (state.queuedPins.length >= ${TOKEN_BUDGETS.MAX_PIN_QUEUE}) {
-            showToast('Queue is full. Send these pins before adding more.', true);
-            return;
-          }
-          state.queuedPins.push(item);
-          addPinMarker(item.rect, '#' + state.queuedPins.length);
-          noteInput.value = '';
-          syncUi();
-          showToast('Pinned #' + state.queuedPins.length + ' (click more or press Enter / Send)', false);
-          return;
-        }
-        cleanup();
-        emitPayload(item);
-      }
-
-      function renderHoverHighlight(el) {
+      function renderHoverHighlight(el, locked) {
         if (!el) return;
         const rect = el.getBoundingClientRect();
         highlightBox.style.display = 'block';
@@ -362,59 +318,195 @@ export const OVERLAY_ENGINE_SCRIPT = `
         highlightBox.style.top = rect.top + 'px';
         highlightBox.style.width = rect.width + 'px';
         highlightBox.style.height = rect.height + 'px';
+        highlightBox.style.borderColor = locked ? TOKENS.successBright : TOKENS.accentBorder;
+        highlightBox.style.background = locked ? TOKENS.successSoft : TOKENS.accentSoft;
 
         badge.style.display = 'block';
-        const badgeTop = rect.top > 30 ? rect.top - 24 : rect.bottom + 6;
-        badge.style.left = Math.max(10, rect.left) + 'px';
+        const badgeTop = rect.top > 30 ? rect.top - 26 : rect.bottom + 6;
+        badge.style.left = Math.max(10, Math.min(window.innerWidth - 260, rect.left)) + 'px';
         badge.style.top = Math.max(10, badgeTop) + 'px';
-
-        if (el !== state.hoveredTarget) {
-          state.hoveredTarget = el;
-          const idStr = el.id ? '#' + el.id : '';
-          const classStr = el.className && typeof el.className === 'string'
-            ? '.' + el.className.trim().split(/\\s+/).slice(0, 2).join('.')
-            : '';
-          const comp = resolveComponentHint(el);
-          const compPrefix = comp && comp.componentName ? '[' + comp.componentName + '] ' : '';
-          badge.textContent = compPrefix + '<' + el.tagName.toLowerCase() + idStr + classStr + '> (' + Math.round(rect.width) + 'x' + Math.round(rect.height) + ')';
-        }
+        badge.textContent = formatElementLabel(el, rect);
       }
 
-      roleDefs.forEach((r) => {
-        const btn = createPillButton(r.label, r.tip);
-        btn.addEventListener('click', (ev) => {
+      function openAnnotationPopover(selection) {
+        closePopover();
+        state.pendingSelection = selection;
+        badge.style.display = 'none';
+
+        if (selection.kind === 'element' && selection.target) {
+          renderHoverHighlight(selection.target, true);
+          badge.style.display = 'none';
+        } else if (selection.kind === 'region') {
+          highlightBox.style.display = 'block';
+          highlightBox.style.left = selection.rect.x + 'px';
+          highlightBox.style.top = selection.rect.y + 'px';
+          highlightBox.style.width = selection.rect.width + 'px';
+          highlightBox.style.height = selection.rect.height + 'px';
+          highlightBox.style.borderColor = TOKENS.warningBorder;
+          highlightBox.style.background = TOKENS.warningSoft;
+        }
+
+        let selectedRole = state.defaultRole === 'pin' ? 'single' : state.defaultRole;
+
+        const popover = document.createElement('div');
+        popover.setAttribute(UI_PREFIX, 'popover');
+        popover.setAttribute('role', 'dialog');
+        popover.setAttribute('aria-label', 'Annotate selection for AI');
+
+        const popWidth = 320;
+        const left = Math.max(12, Math.min(window.innerWidth - popWidth - 12, selection.rect.x));
+        const spaceBelow = window.innerHeight - (selection.rect.y + selection.rect.height);
+        const top = spaceBelow >= 120
+          ? Math.min(window.innerHeight - 118, selection.rect.y + selection.rect.height + 8)
+          : Math.max(58, selection.rect.y - 114);
+
+        popover.style.cssText = [
+          'position:fixed',
+          'left:' + left + 'px',
+          'top:' + top + 'px',
+          'width:' + popWidth + 'px',
+          'z-index:' + TOKENS.zControl,
+          'background:' + TOKENS.toolbarBg,
+          'color:' + TOKENS.text,
+          'padding:10px',
+          'border-radius:12px',
+          'font-family:' + TOKENS.fontUi,
+          'font-size:12px',
+          'box-shadow:0 16px 36px rgba(0,0,0,0.45),0 0 0 1px rgba(255,255,255,0.14)',
+          'backdrop-filter:blur(12px)',
+          'display:flex',
+          'flex-direction:column',
+          'gap:8px',
+          'box-sizing:border-box'
+        ].join(';');
+
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;';
+        const summary = document.createElement('span');
+        summary.style.cssText = 'font-family:' + TOKENS.fontMono + ';font-size:11px;color:' + TOKENS.accentBorder + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;';
+        summary.textContent = selection.label;
+        const dismissBtn = createBtn('×', 'Pick a different element (Esc)');
+        dismissBtn.style.cssText = 'border:none;background:transparent;color:' + TOKENS.muted + ';font-size:15px;line-height:1;cursor:pointer;padding:0 4px;';
+        header.appendChild(summary);
+        header.appendChild(dismissBtn);
+
+        const noteInput = document.createElement('input');
+        noteInput.type = 'text';
+        noteInput.maxLength = 240;
+        noteInput.placeholder = 'Note for AI (optional) — Enter to send';
+        noteInput.setAttribute('aria-label', 'Note for AI');
+        noteInput.style.cssText = 'width:100%;box-sizing:border-box;background:' + TOKENS.inputBg + ';border:1px solid ' + TOKENS.borderSubtle + ';color:' + TOKENS.text + ';border-radius:8px;padding:7px 10px;font-size:12px;outline:none;';
+
+        const footer = document.createElement('div');
+        footer.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:6px;';
+
+        const roleCycle = [
+          { id: 'single', label: 'Pin' },
+          { id: 'target', label: 'Target A' },
+          { id: 'reference', label: 'Ref B' }
+        ];
+        const roleBtn = createBtn('', 'Click to cycle Pin / Target A / Ref B for A/B compare');
+        function syncRoleBtn() {
+          const entry = roleCycle.find((r) => r.id === selectedRole) || roleCycle[0];
+          roleBtn.textContent = entry.label;
+          roleBtn.style.cssText = selectedRole === 'single'
+            ? 'border:1px solid ' + TOKENS.borderSubtle + ';background:transparent;color:' + TOKENS.muted + ';padding:4px 8px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;'
+            : 'border:1px solid ' + TOKENS.warningBorder + ';background:' + TOKENS.warning + ';color:#fff;padding:4px 8px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;';
+        }
+        syncRoleBtn();
+
+        const actions = document.createElement('div');
+        actions.style.cssText = 'display:flex;align-items:center;gap:6px;';
+
+        const addMoreBtn = createBtn('+ Pin', 'Add to queue and pick another (Shift+Enter)');
+        addMoreBtn.style.cssText = 'border:1px solid ' + TOKENS.borderSubtle + ';background:transparent;color:' + TOKENS.text + ';padding:4px 9px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;';
+
+        const sendBtn = createBtn('Send ↵', 'Send to Spector AI (Enter)');
+        sendBtn.style.cssText = 'border:1px solid ' + TOKENS.accentBorder + ';background:' + TOKENS.accent + ';color:#fff;padding:4px 11px;border-radius:7px;font-size:11px;font-weight:600;cursor:pointer;';
+
+        function buildCurrentPin(roleOverride) {
+          const note = noteInput.value.trim() || undefined;
+          const role = roleOverride || selectedRole;
+          return selection.kind === 'region'
+            ? buildRegionPayload(selection.rect, role, note)
+            : buildElementPayload(selection.target, role, note);
+        }
+
+        function queueCurrentAndContinue() {
+          if (state.queuedPins.length >= ${TOKEN_BUDGETS.MAX_PIN_QUEUE}) {
+            showToast('Queue is full. Click Send to finish.', true);
+            return;
+          }
+          const item = buildCurrentPin(selectedRole === 'single' ? 'pin' : selectedRole);
+          state.queuedPins.push(item);
+          addPinMarker(item.rect || selection.rect, '#' + state.queuedPins.length);
+          closePopover();
+          highlightBox.style.display = 'none';
+          syncHud();
+        }
+
+        function sendNow() {
+          const item = buildCurrentPin();
+          submitQueue(item);
+        }
+
+        roleBtn.addEventListener('click', (ev) => {
           ev.stopPropagation();
           ev.preventDefault();
-          state.role = r.id;
-          syncUi();
-        }, { signal: listenerController.signal });
-        roleButtons[r.id] = btn;
-        roleGroup.appendChild(btn);
-      });
+          const idx = roleCycle.findIndex((r) => r.id === selectedRole);
+          selectedRole = roleCycle[(idx + 1) % roleCycle.length].id;
+          syncRoleBtn();
+          noteInput.focus();
+        });
 
-      modeBtn.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        ev.preventDefault();
-        state.mode = state.mode === 'element' ? 'region' : 'element';
-        highlightBox.style.display = 'none';
-        badge.style.display = 'none';
-        syncUi();
-      }, { signal: listenerController.signal });
-
-      noteInput.addEventListener('keydown', (ev) => {
-        ev.stopPropagation();
-        if (ev.key === 'Escape') {
-          noteInput.blur();
-        } else if (ev.key === 'Enter') {
+        addMoreBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
           ev.preventDefault();
-          noteInput.blur();
-          if (state.role === 'pin' && state.queuedPins.length > 0 && !noteInput.value.trim()) {
-            submitQueue();
-          }
-        }
-      }, { signal: listenerController.signal });
+          queueCurrentAndContinue();
+        });
 
-      doneBtn.addEventListener('click', (ev) => {
+        sendBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          sendNow();
+        });
+
+        dismissBtn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          ev.preventDefault();
+          closePopover();
+          highlightBox.style.display = 'none';
+        });
+
+        noteInput.addEventListener('keydown', (ev) => {
+          ev.stopPropagation();
+          if (ev.key === 'Escape') {
+            ev.preventDefault();
+            closePopover();
+            highlightBox.style.display = 'none';
+          } else if (ev.key === 'Enter' && ev.shiftKey) {
+            ev.preventDefault();
+            queueCurrentAndContinue();
+          } else if (ev.key === 'Enter') {
+            ev.preventDefault();
+            sendNow();
+          }
+        });
+
+        actions.appendChild(addMoreBtn);
+        actions.appendChild(sendBtn);
+        footer.appendChild(roleBtn);
+        footer.appendChild(actions);
+
+        popover.appendChild(header);
+        popover.appendChild(noteInput);
+        popover.appendChild(footer);
+        document.body.appendChild(popover);
+        popoverEl = popover;
+        noteInput.focus();
+      }
+
+      sendQueueBtn.addEventListener('click', (ev) => {
         ev.stopPropagation();
         ev.preventDefault();
         submitQueue();
@@ -427,107 +519,152 @@ export const OVERLAY_ENGINE_SCRIPT = `
         resolve({ status: 'cancelled' });
       }, { signal: listenerController.signal });
 
-      toolbar.appendChild(dot);
-      toolbar.appendChild(titleLabel);
-      toolbar.appendChild(roleGroup);
-      toolbar.appendChild(modeBtn);
-      toolbar.appendChild(noteInput);
-      toolbar.appendChild(doneBtn);
-      toolbar.appendChild(cancelBtn);
-
       document.body.appendChild(toolbar);
       document.body.appendChild(highlightBox);
       document.body.appendChild(marqueeBox);
       document.body.appendChild(badge);
-      syncUi();
+      syncHud();
 
       function onMouseDown(ev) {
-        if (state.mode !== 'region' || isOverlayEl(ev.target)) return;
+        if (ev.button !== 0 || isOverlayEl(ev.target)) return;
+        if (state.pendingSelection) {
+          closePopover();
+        }
         ev.preventDefault();
         ev.stopPropagation();
-        state.isDragging = true;
-        state.dragStart = { x: ev.clientX, y: ev.clientY };
-        marqueeBox.style.display = 'block';
-        marqueeBox.style.left = state.dragStart.x + 'px';
-        marqueeBox.style.top = state.dragStart.y + 'px';
-        marqueeBox.style.width = '0px';
-        marqueeBox.style.height = '0px';
+        state.pointerDown = { x: ev.clientX, y: ev.clientY };
+        state.isDragging = false;
       }
 
       function onMouseMove(ev) {
-        if (state.mode === 'region') {
-          if (!state.isDragging || !state.dragStart) return;
-          marqueeBox.style.left = Math.min(state.dragStart.x, ev.clientX) + 'px';
-          marqueeBox.style.top = Math.min(state.dragStart.y, ev.clientY) + 'px';
-          marqueeBox.style.width = Math.abs(ev.clientX - state.dragStart.x) + 'px';
-          marqueeBox.style.height = Math.abs(ev.clientY - state.dragStart.y) + 'px';
-          return;
+        if (state.pointerDown) {
+          const dx = Math.abs(ev.clientX - state.pointerDown.x);
+          const dy = Math.abs(ev.clientY - state.pointerDown.y);
+          if (!state.isDragging && (dx >= 8 || dy >= 8)) {
+            state.isDragging = true;
+            highlightBox.style.display = 'none';
+            badge.style.display = 'none';
+            marqueeBox.style.display = 'block';
+          }
+          if (state.isDragging) {
+            marqueeBox.style.left = Math.min(state.pointerDown.x, ev.clientX) + 'px';
+            marqueeBox.style.top = Math.min(state.pointerDown.y, ev.clientY) + 'px';
+            marqueeBox.style.width = dx + 'px';
+            marqueeBox.style.height = dy + 'px';
+            return;
+          }
         }
 
-        // Coalesce high-frequency pointer hit-testing and fiber lookups to one update per animation frame.
+        if (state.pendingSelection || isOverlayEl(ev.target)) return;
+
         pendingPoint = { x: ev.clientX, y: ev.clientY };
         if (hoverRafId) return;
         hoverRafId = requestAnimationFrame(() => {
           hoverRafId = 0;
-          if (!pendingPoint || state.mode !== 'element') return;
+          if (!pendingPoint || state.isDragging || state.pendingSelection) return;
           const el = resolveElementAt(pendingPoint.x, pendingPoint.y);
-          if (el) renderHoverHighlight(el);
+          if (el && el !== state.hoveredTarget) {
+            state.hoveredTarget = el;
+            state.childStack = [];
+            renderHoverHighlight(el, false);
+          }
         });
       }
 
       function onMouseUp(ev) {
-        if (state.mode !== 'region' || !state.isDragging || !state.dragStart) return;
-        ev.preventDefault();
-        ev.stopPropagation();
+        if (!state.pointerDown) return;
+        const start = state.pointerDown;
+        const wasDragging = state.isDragging;
+        state.pointerDown = null;
         state.isDragging = false;
         marqueeBox.style.display = 'none';
+        suppressNextClick = true;
+        setTimeout(() => { suppressNextClick = false; }, 0);
 
-        const rect = {
-          x: Math.round(Math.min(state.dragStart.x, ev.clientX)),
-          y: Math.round(Math.min(state.dragStart.y, ev.clientY)),
-          width: Math.round(Math.abs(ev.clientX - state.dragStart.x)),
-          height: Math.round(Math.abs(ev.clientY - state.dragStart.y))
-        };
-        state.dragStart = null;
-        if (rect.width < 8 || rect.height < 8) return;
-        handleCapturedItem(buildRegionPayload(rect));
+        ev.preventDefault();
+        ev.stopPropagation();
+
+        if (wasDragging) {
+          const rect = {
+            x: Math.round(Math.min(start.x, ev.clientX)),
+            y: Math.round(Math.min(start.y, ev.clientY)),
+            width: Math.round(Math.abs(ev.clientX - start.x)),
+            height: Math.round(Math.abs(ev.clientY - start.y))
+          };
+          if (rect.width < 8 || rect.height < 8) return;
+          openAnnotationPopover({
+            kind: 'region',
+            rect,
+            label: 'Region (' + rect.width + 'x' + rect.height + ')'
+          });
+          return;
+        }
+
+        const target = state.hoveredTarget || resolveElementAt(ev.clientX, ev.clientY);
+        if (!target) return;
+        const r = target.getBoundingClientRect();
+        openAnnotationPopover({
+          kind: 'element',
+          target,
+          rect: { x: Math.round(r.left), y: Math.round(r.top), width: Math.round(r.width), height: Math.round(r.height) },
+          label: formatElementLabel(target, r)
+        });
       }
 
       function onClick(ev) {
         if (isOverlayEl(ev.target)) return;
+        if (suppressNextClick || !state.pendingSelection) {
+          ev.preventDefault();
+          ev.stopPropagation();
+          ev.stopImmediatePropagation();
+        }
+      }
+
+      function stepTree(direction) {
+        if (!state.hoveredTarget || state.pendingSelection) return;
+        if (direction === 'up') {
+          const parent = state.hoveredTarget.parentElement;
+          if (!parent || parent === document.documentElement || isOverlayEl(parent)) return;
+          state.childStack.push(state.hoveredTarget);
+          state.hoveredTarget = parent;
+          renderHoverHighlight(parent, false);
+        } else if (direction === 'down') {
+          let nextChild = state.childStack.pop();
+          if (!nextChild || !nextChild.isConnected) {
+            nextChild = Array.from(state.hoveredTarget.children).find((c) => !isOverlayEl(c));
+          }
+          if (!nextChild) return;
+          state.hoveredTarget = nextChild;
+          renderHoverHighlight(nextChild, false);
+        }
+      }
+
+      function onWheel(ev) {
+        if (!ev.shiftKey || state.pendingSelection) return;
         ev.preventDefault();
         ev.stopPropagation();
-        ev.stopImmediatePropagation();
-        if (state.mode === 'region') return;
-
-        // Resolve synchronously at click coordinates so fast hover+click never races rAF throttling.
-        const target = resolveElementAt(ev.clientX, ev.clientY) || state.hoveredTarget;
-        if (!target) {
-          cleanup();
-          resolve({ status: 'cancelled' });
-          return;
-        }
-        handleCapturedItem(buildElementPayload(target));
+        stepTree(ev.deltaY < 0 ? 'up' : 'down');
       }
 
       function onKeyDown(ev) {
-        if (document.activeElement === noteInput) return;
-        const hasModifier = ev.ctrlKey || ev.metaKey || ev.altKey;
+        if (popoverEl && popoverEl.contains(document.activeElement)) return;
         if (ev.key === 'Escape') {
           ev.preventDefault();
           ev.stopPropagation();
+          if (state.pendingSelection) {
+            closePopover();
+            highlightBox.style.display = 'none';
+            return;
+          }
           cleanup();
           resolve({ status: 'cancelled' });
-        } else if (!hasModifier && (ev.key === 'n' || ev.key === 'N')) {
+        } else if (ev.key === 'ArrowUp' && !state.pendingSelection) {
           ev.preventDefault();
-          noteInput.focus();
-        } else if (!hasModifier && (ev.key === 'r' || ev.key === 'R')) {
+          stepTree('up');
+        } else if (ev.key === 'ArrowDown' && !state.pendingSelection) {
           ev.preventDefault();
-          state.mode = state.mode === 'element' ? 'region' : 'element';
-          highlightBox.style.display = 'none';
-          badge.style.display = 'none';
-          syncUi();
-        } else if (!hasModifier && ev.key === 'Enter' && state.role === 'pin' && state.queuedPins.length > 0) {
+          stepTree('down');
+        } else if (ev.key === 'Enter' && !state.pendingSelection && state.queuedPins.length > 0) {
           ev.preventDefault();
           submitQueue();
         }
@@ -538,6 +675,7 @@ export const OVERLAY_ENGINE_SCRIPT = `
       window.addEventListener('mousedown', onMouseDown, captureOpts);
       window.addEventListener('mouseup', onMouseUp, captureOpts);
       window.addEventListener('click', onClick, captureOpts);
+      window.addEventListener('wheel', onWheel, { capture: true, passive: false, signal: listenerController.signal });
       window.addEventListener('keydown', onKeyDown, captureOpts);
 
       if (timeoutMs > 0) {
@@ -550,7 +688,7 @@ export const OVERLAY_ENGINE_SCRIPT = `
   }
 
   window.__spectorOverlay = {
-    __version: 4,
+    __version: 5,
     start: startOverlay
   };
 })();

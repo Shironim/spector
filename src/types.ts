@@ -12,6 +12,7 @@ export interface ConsoleLogEntry {
   text: string;
   timestamp: string;
   location?: string;
+  targetId?: string;
   count?: number;
 }
 
@@ -24,7 +25,13 @@ export interface NetworkLogEntry {
   statusText?: string;
   durationMs?: number;
   timestamp: string;
+  targetId?: string;
   error?: string;
+}
+
+export interface EmulatedMediaOptions {
+  colorScheme?: 'light' | 'dark';
+  reducedMotion?: boolean;
 }
 
 export interface ActiveTabInfo {
@@ -45,21 +52,11 @@ export interface TabInfo {
   isActive: boolean;
 }
 
-export type SpectorToolProfile = 'full' | 'forensics';
-
 export interface TabSelectCriteria {
   index?: number;
   url?: string;
   title?: string;
   latest?: boolean;
-}
-
-export interface FrameworkComponentInfo {
-  framework: 'vue' | 'react' | 'svelte' | 'livewire' | 'alpine' | 'inertia' | 'blade' | 'unknown';
-  componentName?: string;
-  sourceFile?: string;
-  sourceLine?: number;
-  props?: string[];
 }
 
 export interface TypographyCluster {
@@ -123,38 +120,44 @@ export interface PseudoStateDelta {
 export type PinRole = 'single' | 'target' | 'reference' | 'pin';
 export type PinSelectionMode = 'element' | 'region';
 
-export interface AnimationKeyframeEntry {
-  offset?: number | null;
-  easing?: string;
-  props: Record<string, string>;
+export interface PinLayoutIssue {
+  kind: 'horizontal-overflow' | 'sticky-clipped-by-ancestor' | 'content-clipped' | 'stacking-trap' | 'inactive-css';
+  detail: string;
+  ancestorSelector?: string;
 }
 
-export interface ElementAnimationInfo {
-  selector?: string;
-  type: 'css-animation' | 'css-transition' | 'waapi';
-  name?: string;
-  playState?: string;
-  durationMs: number | 'auto';
-  delayMs: number;
-  iterations: number | 'Infinity';
-  easing: string;
-  direction?: string;
-  fill?: string;
-  keyframes?: AnimationKeyframeEntry[];
+export interface PinForensicsSummary {
+  overriddenCss?: Record<string, {
+    winningValue?: string;
+    winningSource?: string;
+    overriddenCount: number;
+    topOverridden: { value: string; source: string; reason: string };
+  }>;
+  layoutIssues?: PinLayoutIssue[];
 }
 
-export interface StaggerPattern {
-  name: string;
-  count: number;
-  stepMs: number;
-  baseDelayMs: number;
-  selectors: string[];
-}
-
-export interface AnimationForensicsReport {
-  activeCount: number;
-  animations: ElementAnimationInfo[];
-  staggerPatterns?: StaggerPattern[];
+export interface PinVerificationReport {
+  status: 'verified' | 'element_not_found';
+  pinId?: string;
+  selector: string;
+  note?: string;
+  changed: boolean;
+  rectDelta?: {
+    xDiff: number;
+    yDiff: number;
+    widthDiff: number;
+    heightDiff: number;
+    before: BoundingRect;
+    after: BoundingRect;
+  };
+  styleChanges: Record<string, { before?: string; after?: string }>;
+  forensicsDelta?: {
+    resolvedIssues: string[];
+    remainingIssues: string[];
+    newIssues: string[];
+  };
+  afterForensics?: PinForensicsSummary;
+  verifiedAt: string;
 }
 
 export interface PickedElementInfo {
@@ -178,10 +181,9 @@ export interface PickedElementInfo {
   focusState?: PseudoStateDelta;
   subtreeSummary?: SubtreeStyleSummary;
   assets?: ElementAssetsMeta;
-  animations?: ElementAnimationInfo[];
+  forensics?: PinForensicsSummary;
   domTree?: string;
   screenshotBase64?: string;
-  frameworkComponent?: FrameworkComponentInfo;
   timestamp?: string;
 }
 
@@ -204,36 +206,6 @@ export interface ScanCoverage {
   visitedElements: number;
   elementLimitReached: boolean;
   excluded: string[];
-}
-
-export interface DesignTokensResult {
-  coverage?: ScanCoverage & { variablesAtLimit: boolean; variablesRequested: boolean };
-  url: string;
-  cssVariables: Record<string, string>;
-  palette: {
-    backgrounds: string[];
-    surfaces: string[];
-    texts: string[];
-    accents: string[];
-    borders: string[];
-  };
-  typography: {
-    fontFamilies: string[];
-    scale: Array<{
-      fontSize: string;
-      fontWeight: string;
-      lineHeight: string;
-      sampleTags: string[];
-      count: number;
-    }>;
-  };
-  radii: string[];
-  shadows: string[];
-  containerWidths: string[];
-  tokenMap?: {
-    cssVarMatches?: Record<string, string>;
-    tailwindHints?: Record<string, string>;
-  };
 }
 
 export interface OverflowCulprit {
@@ -297,8 +269,12 @@ export interface LayoutForensicsReport {
 }
 
 export interface CssCascadeEntry {
-  winningValue: string;
-  winningSource: string;
+  winningValue?: string;
+  winningSource?: string;
+  computedValue?: string;
+  resolution: 'ranked' | 'partial';
+  limitation?: string;
+  authoredDeclarations?: Array<{ value: string; source: string; important: boolean }>;
   important?: boolean;
   overridden: Array<{
     value: string;
@@ -310,6 +286,10 @@ export interface CssCascadeEntry {
 export interface CssCascadeReport {
   selector: string;
   properties: Record<string, CssCascadeEntry>;
+  pseudoElements?: {
+    before?: Record<string, CssCascadeEntry>;
+    after?: Record<string, CssCascadeEntry>;
+  };
 }
 
 export interface BreakpointTargetLayout {
@@ -336,13 +316,12 @@ export interface DiagnoseReport {
   url: string;
   viewport: { width: number; height: number } | null;
   runtimeHealth: {
-    scope?: 'browser-session';
+    scope?: 'active-tab' | 'browser-session';
     consoleErrors: ConsoleLogEntry[];
     failedNetwork: NetworkLogEntry[];
   };
   layoutForensics: LayoutForensicsReport;
   cssCascade?: CssCascadeReport;
-  animations?: AnimationForensicsReport;
   breakpointAudits?: BreakpointAuditItem[];
 }
 

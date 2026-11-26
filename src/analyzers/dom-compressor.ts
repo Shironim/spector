@@ -1,6 +1,6 @@
 import type { Page } from 'playwright-core';
-import { IN_BROWSER_COMPONENT_DETECTOR_FN } from '../utils/framework-detector.js';
 import { TELEMETRY_LIMITS, TOKEN_BUDGETS } from '../constants.js';
+import { evaluateInPage } from '../utils/cdp.js';
 
 export interface DomTreeOptions {
   selector?: string;
@@ -32,7 +32,6 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
     const { rootSelector, withBoxes, depthLimit, withOffscreen, maxClasses, maxClassChars, maxNodes, maxChars } = ${JSON.stringify(args)};
     let visitedNodes = 0;
     const truncated = new Set();
-    ${IN_BROWSER_COMPONENT_DETECTOR_FN}
 
     const root = rootSelector ? document.querySelector(rootSelector) : document.body;
     if (!root) {
@@ -113,7 +112,16 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
       if (visitedNodes >= maxNodes) { truncated.add('NODE_LIMIT'); return []; }
       visitedNodes++;
       if (IGNORED_TAGS.has(el.tagName)) return [];
-      if (!isVisible(el)) return [];
+      if (!isVisible(el)) {
+        const style = window.getComputedStyle(el);
+        if (style.display === 'none' || (style.opacity === '0' && !withOffscreen)) return [];
+        const descendants = [];
+        for (const child of [...el.children, ...(el.shadowRoot ? el.shadowRoot.children : [])]) {
+          if (visitedNodes >= maxNodes) { truncated.add('NODE_LIMIT'); break; }
+          descendants.push(...formatNode(child, currentDepth + 1));
+        }
+        return descendants;
+      }
 
       const lines = [];
       const indent = '  '.repeat(currentDepth);
@@ -134,10 +142,6 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
       const role = el.getAttribute('role') || '';
       const id = el.id ? '#' + el.id : '';
       const classStr = formatClasses(el);
-
-      // Detect framework component ONLY on the root node (avoids per-node tree walks)
-      const comp = currentDepth === 0 && typeof detectFrameworkComponent === 'function' ? detectFrameworkComponent(el) : null;
-      const compHint = comp && comp.componentName ? ' [' + comp.framework + ':' + comp.componentName + ']' : '';
 
       const rect = el.getBoundingClientRect();
       const boxStr = withBoxes
@@ -175,7 +179,7 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
 
       const isInteractive = ['a', 'button', 'input', 'select', 'textarea', 'dialog', 'summary'].includes(tag) || !!role;
       const isHeading = ['h1', 'h2', 'h3', 'h4', 'h5', 'h6'].includes(tag);
-      const hasContent = directText.length > 0 || ariaLabel.length > 0 || !!id || !!(comp && comp.componentName);
+      const hasContent = directText.length > 0 || ariaLabel.length > 0 || !!id;
       const children = Array.from(el.children);
 
       if (!isInteractive && !isHeading && !hasContent && !classStr && children.length === 1) {
@@ -191,7 +195,7 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
         statusHint += ' [offscreen]';
       }
 
-      lines.push(indent + '- <' + tag + id + (classStr ? ' ' + classStr : '') + compHint + roleStr + extraDetails + statusHint + '>' + textSnippet + boxStr);
+      lines.push(indent + '- <' + tag + id + (classStr ? ' ' + classStr : '') + roleStr + extraDetails + statusHint + '>' + textSnippet + boxStr);
 
       for (const child of children) {
         if (visitedNodes >= maxNodes) { truncated.add('NODE_LIMIT'); break; }
@@ -213,7 +217,7 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
     }
 
     const result = formatNode(root, 0);
-    if (result.length > 0) {
+    if (result.length > 0 || truncated.size > 0) {
       let text = result.join('\\n');
       if (text.length > maxChars) { text = text.slice(0, maxChars); truncated.add('CHAR_LIMIT'); }
       return '[DOM coverage: ' + JSON.stringify({ scope: rootSelector || 'body', visitedNodes, nodeLimit: maxNodes, depthLimit, truncation: Array.from(truncated), excluded: ['iframe-documents', 'closed-shadow-roots', 'hidden-elements', 'non-semantic-tags'] }) + ']\\n' + text;
@@ -225,5 +229,5 @@ export async function extractCompressedDom(page: Page, options: DomTreeOptions =
     return 'No visible rendered elements found.';
   })()`;
 
-  return await page.evaluate(script);
+  return await evaluateInPage(page, script);
 }

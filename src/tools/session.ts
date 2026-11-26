@@ -4,28 +4,21 @@ import { CdpSessionManager } from '../browser/cdp-session.js';
 import { jsonResponse } from '../utils/mcp-response.js';
 import { instrumentHandler } from '../utils/tool-instrument.js';
 
-export interface SessionToolsOptions {
-  includeNavigate?: boolean;
-}
-
 export function registerSessionTools(
   server: McpServer,
-  manager: CdpSessionManager,
-  options: SessionToolsOptions = {}
+  manager: CdpSessionManager
 ): void {
-  const { includeNavigate = true } = options;
-
   const attachSchema = {
     cdpUrl: z
       .string()
       .optional()
       .default('http://localhost:9222')
-      .describe('Chrome remote debugging endpoint on localhost (e.g. "http://localhost:9222" or "ws://127.0.0.1:.../devtools/browser/..." from agent-browser get cdp-url)'),
+      .describe('Chrome remote debugging endpoint on localhost (e.g. "http://localhost:9222" or "ws://127.0.0.1:.../devtools/browser/...")'),
     autoSelectActiveTab: z
       .boolean()
       .optional()
       .default(true)
-      .describe('On first connection select the last tab in context order (not necessarily focused). Reattach preserves the selected target.'),
+      .describe('On first connection select the last tab in context order. Reattach preserves the selected target.'),
     autoLaunch: z
       .boolean()
       .optional()
@@ -33,10 +26,19 @@ export function registerSessionTools(
       .describe('Automatically launch Chrome with remote debugging port enabled if not already running (default: true)')
   };
 
-  server.tool(
+  server.registerTool(
     'spector_attach',
-    '[LIFECYCLE: CONNECT CHROME] Connects MCP server to Google Chrome via Chrome DevTools Protocol (CDP). Preserves cookies, auth sessions, and local routing.',
-    attachSchema,
+    {
+      title: 'Attach to Physical Chrome (CDP)',
+      description: '[LIFECYCLE: CONNECT CHROME] Connects Spector to Google Chrome via Chrome DevTools Protocol (CDP), preserving cookies, auth sessions, and local domains.',
+      inputSchema: attachSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
     instrumentHandler<{ cdpUrl?: string; autoSelectActiveTab?: boolean; autoLaunch?: boolean }>(
       'spector_attach',
       async ({ cdpUrl, autoSelectActiveTab, autoLaunch }) => {
@@ -57,7 +59,7 @@ export function registerSessionTools(
     action: z
       .enum(['list', 'select'])
       .optional()
-      .describe('"list" lists open tabs; "select" switches active tab (defaults to "select" when index/url/title is provided, otherwise "list")'),
+      .describe('"list" lists open tabs; "select" switches active tab (defaults to "select" when index/url/title/latest is provided, otherwise "list")'),
     index: z
       .number()
       .optional()
@@ -73,13 +75,22 @@ export function registerSessionTools(
     latest: z
       .boolean()
       .optional()
-      .describe('Select the newest/last tab in browser context order (useful to sync after agent-browser opens a tab)')
+      .describe('Select the newest/last tab in browser context order')
   };
 
-  server.tool(
+  server.registerTool(
     'spector_tabs',
-    '[ROUTING: DISCOVER & SWITCH TABS] Lists all open Chrome tabs or switches active focus between tabs (e.g. between your project tab and a reference website tab) by index, URL filter, page title, or latest: true.',
-    tabsSchema,
+    {
+      title: 'List & Switch Chrome Tabs',
+      description: '[ROUTING: DISCOVER & SWITCH TABS] Lists all open Chrome tabs or switches active focus between tabs (e.g. between your project tab and a reference website tab).',
+      inputSchema: tabsSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: false,
+        idempotentHint: true,
+        openWorldHint: false
+      }
+    },
     instrumentHandler<{ action?: 'list' | 'select'; index?: number; url?: string; title?: string; latest?: boolean }>(
       'spector_tabs',
       async ({ action, index, url, title, latest }) => {
@@ -101,36 +112,6 @@ export function registerSessionTools(
           ...(result.warning ? { warning: result.warning } : {})
         });
       }
-    )
-  );
-
-  if (!includeNavigate) return;
-
-  const navigateSchema = {
-    url: z
-      .string()
-      .describe('Target URL (e.g. "http://localhost:3000", "https://app.test") or "reload" to refresh current page'),
-    waitUntil: z
-      .enum(['load', 'domcontentloaded', 'networkidle'])
-      .optional()
-      .default('load')
-      .describe('Navigation completion condition (default: "load")')
-  };
-
-  server.tool(
-    'spector_navigate',
-    '[NAVIGATION: ROUTE & RELOAD] Navigates the active tab to a URL or reloads the current page.',
-    navigateSchema,
-    instrumentHandler<{ url: string; waitUntil?: 'load' | 'domcontentloaded' | 'networkidle' }>(
-      'spector_navigate',
-      async ({ url, waitUntil }) => {
-        const result = await manager.navigate(url, waitUntil ?? 'load');
-        return jsonResponse({
-          status: 'navigated',
-          url: result.url,
-          title: result.title
-        });
-      }, operation => manager.runBrowserOperation(operation, true)
     )
   );
 }

@@ -8,12 +8,8 @@ import {
 } from '../../src/analyzers/design-blueprint.js';
 import { explainCssCascade, extractPseudoStateDelta } from '../../src/analyzers/cdp-styles.js';
 import { runLayoutForensics } from '../../src/analyzers/layout-forensics.js';
-import { runAnimationForensics } from '../../src/analyzers/animation-forensics.js';
-import { buildTokenMap, normalizeCssColor } from '../../src/analyzers/token-mapper.js';
-import { parsePickerPayload } from '../../src/browser/picker-payload.js';
 import { HOTKEY_BINDING_SCRIPT, OVERLAY_ENGINE_SCRIPT } from '../../src/browser/overlay-script.js';
 import { IN_BROWSER_CSS_SELECTOR_FN } from '../../src/utils/selector.js';
-import { IN_BROWSER_COMPONENT_DETECTOR_FN } from '../../src/utils/framework-detector.js';
 import type { PickedElementInfo } from '../../src/types.js';
 
 describe('Spector v2 Analyzers & Multi-Pin Architecture', () => {
@@ -517,142 +513,12 @@ describe('Spector v2 Analyzers & Multi-Pin Architecture', () => {
     assert.equal(selectorFnMatches.length, 1);
 
     assert.match(OVERLAY_ENGINE_SCRIPT, /role['"],\s*['"]toolbar['"]/);
-    assert.match(OVERLAY_ENGINE_SCRIPT, /aria-pressed/);
+    assert.match(OVERLAY_ENGINE_SCRIPT, /role['"],\s*['"]dialog['"]/);
     assert.match(OVERLAY_ENGINE_SCRIPT, /aria-live/);
     assert.match(OVERLAY_ENGINE_SCRIPT, /new AbortController\(\)/);
     assert.match(OVERLAY_ENGINE_SCRIPT, /requestAnimationFrame/);
-    assert.match(OVERLAY_ENGINE_SCRIPT, /ev\.ctrlKey \|\| ev\.metaKey \|\| ev\.altKey/);
-  });
-
-  it('detects React, Vue, Livewire, Inertia, Alpine, and Blade hints via decomposed pipeline', () => {
-    const doc = { body: { nodeType: 1 }, documentElement: { nodeType: 1 } };
-    const ctx = vm.createContext({ document: doc });
-    const detectFn = vm.runInContext(
-      `(() => { ${IN_BROWSER_COMPONENT_DETECTOR_FN}; return detectFrameworkComponent; })()`,
-      ctx
-    );
-
-    const makeEl = (extra: Record<string, any> = {}, attrs: Record<string, string> = {}) => ({
-      nodeType: 1,
-      parentElement: null,
-      previousSibling: null,
-      hasAttribute: (k: string) => Object.prototype.hasOwnProperty.call(attrs, k),
-      getAttribute: (k: string) => attrs[k] ?? null,
-      ...extra
-    });
-
-    const reactEl = makeEl({
-      __reactFiber$xyz: {
-        type: Object.assign(function CheckoutButton() {}, { displayName: 'CheckoutButton' }),
-        memoizedProps: { variant: 'primary', children: [] },
-        _debugSource: { fileName: '/@fs/app/src/CheckoutButton.tsx', lineNumber: 18 }
-      }
-    });
-    assert.deepEqual(JSON.parse(JSON.stringify(detectFn(reactEl))), {
-      framework: 'react',
-      componentName: 'CheckoutButton',
-      sourceFile: '/@fs/app/src/CheckoutButton.tsx',
-      sourceLine: 18,
-      props: ['variant']
-    });
-
-    const vueEl = makeEl({
-      __vueParentComponent: {
-        type: { __name: 'PricingCard', __file: 'src/PricingCard.vue' },
-        props: { plan: 'pro', __v_isVNode: true }
-      }
-    });
-    assert.deepEqual(JSON.parse(JSON.stringify(detectFn(vueEl))), {
-      framework: 'vue',
-      componentName: 'PricingCard',
-      sourceFile: 'src/PricingCard.vue',
-      props: ['plan']
-    });
-
-    const livewireEl = makeEl({}, { 'wire:snapshot': '{"memo":{"name":"cart-drawer"}}' });
-    assert.deepEqual(JSON.parse(JSON.stringify(detectFn(livewireEl))), {
-      framework: 'livewire',
-      componentName: 'cart-drawer'
-    });
-
-    const inertiaEl = makeEl({}, { 'data-page': '{"component":"Dashboard/Index"}' });
-    assert.deepEqual(JSON.parse(JSON.stringify(detectFn(inertiaEl))), {
-      framework: 'inertia',
-      componentName: 'Dashboard/Index',
-      sourceFile: 'resources/js/Pages/Dashboard/Index'
-    });
-
-    const alpineEl = makeEl({}, { 'x-data': '{ open: false }' });
-    assert.deepEqual(JSON.parse(JSON.stringify(detectFn(alpineEl))), {
-      framework: 'alpine',
-      componentName: '{ open: false }'
-    });
-
-    const bladeEl = makeEl({
-      previousSibling: { nodeType: 8, textContent: 'Blade: resources/views/components/hero.blade.php' }
-    });
-    assert.deepEqual(JSON.parse(JSON.stringify(detectFn(bladeEl))), {
-      framework: 'blade',
-      componentName: 'hero',
-      sourceFile: 'resources/views/components/hero.blade.php'
-    });
-  });
-
-  it('extracts active animations, keyframes, and stagger patterns via runAnimationForensics', async () => {
-    const makeAnim = (id: string, delay: number) => ({
-      animationName: 'fadeInUp',
-      playState: 'running',
-      effect: {
-        target: { id, nodeType: 1, tagName: 'DIV', className: 'card', parentElement: null },
-        getTiming: () => ({ duration: 420, delay, iterations: 1, easing: 'cubic-bezier(0.16, 1, 0.3, 1)', direction: 'normal', fill: 'forwards' }),
-        getKeyframes: () => [
-          { offset: 0, computedOffset: 0, easing: 'linear', opacity: '0', transform: 'translateY(16px)' },
-          { offset: 1, computedOffset: 1, easing: 'linear', opacity: '1', transform: 'translateY(0px)' }
-        ]
-      }
-    });
-
-    const page = {
-      evaluate: async (script: string) =>
-        vm.runInContext(
-          script,
-          vm.createContext({
-            CSS: { escape: (s: string) => s },
-            document: {
-              getAnimations: () => [makeAnim('c1', 0), makeAnim('c2', 60), makeAnim('c3', 120)],
-              querySelectorAll: () => [{}]
-            }
-          })
-        )
-    };
-
-    const report = await runAnimationForensics(page as any);
-    assert.equal(report.activeCount, 3);
-    assert.equal(report.animations.length, 3);
-    assert.equal(report.animations[0].type, 'css-animation');
-    assert.equal(report.animations[0].durationMs, 420);
-    assert.equal(report.animations[0].easing, 'cubic-bezier(0.16, 1, 0.3, 1)');
-    assert.equal(report.animations[0].keyframes?.[0].props.opacity, '0');
-    assert.equal(report.staggerPatterns?.length, 1);
-    assert.equal(report.staggerPatterns?.[0].stepMs, 60);
-    assert.equal(report.staggerPatterns?.[0].count, 3);
-
-    const parsed = parsePickerPayload({
-      status: 'selected',
-      role: 'single',
-      pinMode: 'element',
-      selector: '#c1',
-      animations: [{
-        type: 'css-animation',
-        name: 'fadeInUp',
-        durationMs: 420,
-        delayMs: 0,
-        iterations: 1,
-        easing: 'cubic-bezier(0.16, 1, 0.3, 1)',
-        keyframes: [{ offset: 0, props: { opacity: '0' } }]
-      }]
-    });
-    assert.equal(parsed.pins[0].animations?.[0].durationMs, 420);
+    assert.match(OVERLAY_ENGINE_SCRIPT, /ArrowUp/);
+    assert.match(OVERLAY_ENGINE_SCRIPT, /ArrowDown/);
   });
 
   it('detects inactive CSS properties in runLayoutForensics', async () => {
@@ -716,42 +582,5 @@ describe('Spector v2 Analyzers & Multi-Pin Architecture', () => {
     assert.ok(report.inactiveCss.some(h => h.selector === '#static-z' && h.property === 'z-index'));
     assert.ok(report.inactiveCss.some(h => h.selector === '#static-z' && h.property === 'gap'));
     assert.ok(report.inactiveCss.some(h => h.selector === '#inline-span' && h.property === 'marginTop'));
-  });
-
-  it('maps extracted design tokens to :root CSS variables and Tailwind utility hints', () => {
-    assert.equal(normalizeCssColor('#2563eb'), 'rgb(37, 99, 235)');
-    assert.equal(normalizeCssColor('#fff'), 'rgb(255, 255, 255)');
-
-    const mapped = buildTokenMap({
-      url: 'http://localhost:3000/',
-      cssVariables: {
-        '--brand-primary': '#2563eb',
-        '--radius-card': '12px'
-      },
-      palette: {
-        backgrounds: ['rgb(255, 255, 255)'],
-        surfaces: [],
-        texts: [],
-        accents: ['rgb(37, 99, 235)'],
-        borders: []
-      },
-      typography: {
-        fontFamilies: ['Inter, sans-serif'],
-        scale: [{ fontSize: '24px', fontWeight: '700', lineHeight: '32px', sampleTags: ['h2'], count: 2 }]
-      },
-      radii: ['12px'],
-      shadows: [],
-      containerWidths: ['1280px']
-    });
-
-    assert.deepEqual(mapped?.cssVarMatches, {
-      'rgb(37, 99, 235)': 'var(--brand-primary)',
-      '12px': 'var(--radius-card)'
-    });
-    assert.deepEqual(mapped?.tailwindHints, {
-      '12px': 'rounded-xl',
-      '1280px': 'max-w-screen-xl',
-      '24px': 'text-2xl'
-    });
   });
 });

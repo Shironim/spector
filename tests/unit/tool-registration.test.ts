@@ -1,67 +1,55 @@
 import { describe, it } from 'bun:test';
 import assert from 'node:assert';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createSpectorServer } from '../../src/index.js';
+import { CdpSessionManager } from '../../src/browser/cdp-session.js';
+import { coreToolNames } from '../tool-contract.js';
 
-describe('MCP Tool Registration & Contract Integrity (Spector v2)', () => {
-  it('defaults to the 7 core forensics tools and excludes automation/removed v1 tools', () => {
-    const server = createSpectorServer();
-    const tools = (server as any)._registeredTools;
-    assert.ok(tools, 'server should have registered tools');
+describe('MCP Tool Registration & Wire-Level Protocol Contract (Spector Slim)', () => {
+  it('registers exactly the 5 core tools with MCP annotations over real InMemoryTransport', async () => {
+    const manager = new CdpSessionManager();
+    const server = createSpectorServer(manager);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client({ name: 'spector-protocol-test', version: '1.0.0' });
 
-    const forensicsTools = [
-      'spector_attach',
-      'spector_tabs',
-      'spector_picker',
-      'spector_capture_screenshot',
-      'spector_diagnose',
-      'spector_extract_tokens',
-      'spector_preview_css'
-    ];
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
 
-    for (const name of forensicsTools) {
-      assert.ok(tools[name], `Expected forensics tool "${name}" to be registered by default`);
-    }
+    try {
+      const { tools } = await client.listTools();
+      const names = tools.map(t => t.name).sort();
+      assert.deepStrictEqual(names, coreToolNames);
 
-    for (const omitted of ['spector_navigate', 'spector_get_dom_tree', 'spector_interact']) {
-      assert.strictEqual(tools[omitted], undefined, `Tool "${omitted}" should be omitted in default forensics profile`);
-    }
+      // Verify pruned/legacy tools are absent
+      for (const removed of [
+        'spector_navigate',
+        'spector_get_dom_tree',
+        'spector_interact',
+        'spector_preview_css',
+        'spector_extract_tokens',
+        'spector_list_tabs',
+        'spector_select_tab'
+      ]) {
+        assert.ok(!names.includes(removed), `Pruned tool "${removed}" should not be registered`);
+      }
 
-    const removedToolNames = [
-      'spector_list_tabs',
-      'spector_select_tab',
-      'spector_get_last_picked',
-      'spector_pick_element',
-      'spector_diff_dom',
-      'spector_mock_network',
-      'spector_get_network_logs',
-      'spector_get_console_logs'
-    ];
+      // Verify annotations exist on every tool
+      for (const tool of tools) {
+        assert.ok(tool.annotations, `Tool "${tool.name}" should declare MCP annotations`);
+      }
+      const diagnoseTool = tools.find(t => t.name === 'spector_diagnose');
+      assert.strictEqual(diagnoseTool?.annotations?.readOnlyHint, true);
 
-    for (const name of removedToolNames) {
-      assert.strictEqual(tools[name], undefined, `Removed v1 tool "${name}" should not be registered`);
-    }
-  });
-
-  it('registers all 10 tools when profile is "full"', () => {
-    const server = createSpectorServer(undefined, 'full');
-    const tools = (server as any)._registeredTools;
-    assert.ok(tools, 'server should have registered tools');
-
-    const expectedToolNames = [
-      'spector_attach',
-      'spector_tabs',
-      'spector_navigate',
-      'spector_picker',
-      'spector_get_dom_tree',
-      'spector_capture_screenshot',
-      'spector_diagnose',
-      'spector_extract_tokens',
-      'spector_interact',
-      'spector_preview_css'
-    ];
-
-    for (const name of expectedToolNames) {
-      assert.ok(tools[name], `Expected full-profile tool "${name}" to be registered on McpServer`);
+      // Verify wire-level tool invocation when unattached returns structured fail-safe error
+      const pickerRes = await client.callTool({ name: 'spector_picker', arguments: { action: 'get' } });
+      assert.strictEqual(pickerRes.isError, true);
+      const body = JSON.parse((pickerRes.content as Array<{ text: string }>)[0].text);
+      assert.strictEqual(body.success, false);
+      assert.strictEqual(body.data.code, 'BROWSER_NOT_ATTACHED');
+    } finally {
+      await client.close();
+      await server.close();
     }
   });
 });

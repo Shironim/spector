@@ -1,10 +1,12 @@
 import { chromium, type Browser, type BrowserContext, type CDPSession, type Page, type Request } from 'playwright-core';
 import type {
   ActiveTabInfo,
+  BoundingRect,
   ComparisonDiff,
   PickedElementInfo,
   PinRole,
   PinSelectionMode,
+  PinVerificationReport,
   TabInfo,
   TabSelectCriteria
 } from '../types.js';
@@ -12,67 +14,70 @@ import { type BreakpointPreset, TIMEOUTS } from '../constants.js';
 import { TelemetryStore } from './telemetry-store.js';
 import { PinStore } from './pin-store.js';
 import { extractCdpPort, launchChromeForCdp, validateCdpEndpoint } from './chrome-launcher.js';
-import { dispatchPageInteraction, type InteractAction } from './interactions.js';
 import { HOTKEY_BINDING_SCRIPT, OVERLAY_ENGINE_SCRIPT } from './overlay-script.js';
 import { SpectorError } from '../utils/mcp-response.js';
 import { logger } from '../utils/logger.js';
-import { ActivityIndicator } from './activity-indicator.js';
 import { BrowserOperationEngine } from './operation-engine.js';
 import { DocumentRegistry } from './document-registry.js';
 import { RenderCapture } from './render-capture.js';
 import { parsePickerPayload, type BrowserPickedPin } from './picker-payload.js';
 import { PickerEvidence } from './picker-evidence.js';
+import { evaluateInPage, getCdpTargetInfo, setMainFrameCorrupted } from '../utils/cdp.js';
+import { escapeTailwindSelector } from '../utils/selector.js';
+import { BLUEPRINT_LIMITS, IN_BROWSER_BLUEPRINT_EXTRACTOR_FN } from '../analyzers/design-blueprint.js';
+import { collectPinForensics, computePinVerificationDiff } from '../analyzers/pin-forensics.js';
 
 export { validateCdpEndpoint, extractCdpPort } from './chrome-launcher.js';
 
+interface PageTabEntry {
+  page: Page;
+  targetId: string;
+  title: string;
+  url: string;
+}
+
 type TabMatcher = {
   key: keyof TabSelectCriteria;
-  matches: (criteria: TabSelectCriteria, pages: Page[]) => Promise<Page | undefined>;
+  matches: (criteria: TabSelectCriteria, tabs: PageTabEntry[]) => Promise<PageTabEntry | undefined>;
 };
 
 const TAB_MATCHERS: ReadonlyArray<TabMatcher> = [
   {
     key: 'index',
-    matches: async (criteria, pages) => {
+    matches: async (criteria, tabs) => {
       const idx = criteria.index!;
-      if (idx < 0 || idx >= pages.length) {
-        throw new SpectorError('TAB_NOT_FOUND', `Tab index ${idx} is out of bounds (0-${pages.length - 1}).`);
+      if (idx < 0 || idx >= tabs.length) {
+        throw new SpectorError('TAB_NOT_FOUND', `Tab index ${idx} is out of bounds (0-${tabs.length - 1}).`);
       }
-      return pages[idx];
+      return tabs[idx];
     }
   },
   {
     key: 'url',
-    matches: async (criteria, pages) => {
+    matches: async (criteria, tabs) => {
       const rawQuery = criteria.url!.trim();
       if (!rawQuery) return undefined;
       if (rawQuery.includes('*')) {
         const collapsed = rawQuery.replace(/\*+/g, '*');
         const escaped = collapsed.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*');
         const globRe = new RegExp(escaped, 'i');
-        return pages.find(p => globRe.test(p.url()));
+        return tabs.find(t => globRe.test(t.url));
       }
       const needle = rawQuery.toLowerCase();
-      return pages.find(p => p.url().toLowerCase().includes(needle));
+      return tabs.find(t => t.url.toLowerCase().includes(needle));
     }
   },
   {
     key: 'title',
-    matches: async (criteria, pages) => {
+    matches: async (criteria, tabs) => {
       const titleQuery = criteria.title!.trim().toLowerCase();
       if (!titleQuery) return undefined;
-      const needle = titleQuery;
-      for (const p of pages) {
-        if ((await p.title()).toLowerCase().includes(needle)) {
-          return p;
-        }
-      }
-      return undefined;
+      return tabs.find(t => t.title.toLowerCase().includes(titleQuery));
     }
   },
   {
     key: 'latest',
-    matches: async (_criteria, pages) => pages[pages.length - 1]
+    matches: async (_criteria, tabs) => tabs[tabs.length - 1]
   }
 ];
 
@@ -81,7 +86,7 @@ function serializeQueue<T>(tail: Promise<unknown>, fn: () => Promise<T>): { next
   return { next, updatedTail: next.catch(() => {}) };
 }
 
-function evidenceUrl(raw: string): string {
+export function evidenceUrl(raw: string): string {
   try {
     const url = new URL(raw);
     if (!['http:', 'https:', 'about:'].includes(url.protocol)) return `${url.protocol}[REDACTED]`;
@@ -102,7 +107,6 @@ export class CdpSessionManager {
 
   public readonly telemetry = new TelemetryStore();
   public readonly pins = new PinStore();
-  public readonly activity = new ActivityIndicator();
 
   private requestStartTimes = new Map<Request, number>();
   private attachedPages = new WeakSet<Page>();
@@ -112,10 +116,18 @@ export class CdpSessionManager {
   private pendingPageSetups = new Set<Promise<void>>();
   private attachQueue: Promise<unknown> = Promise.resolve();
   private targetIds = new WeakMap<Page, string>();
+  private authoritativeUrls = new WeakMap<Page, string>();
   private nextTargetId = 0;
   private readonly documents = new DocumentRegistry();
-  private readonly operations = new BrowserOperationEngine(this.activity, (page, url, navigated) => this.assertTarget(page, url, navigated));
-  private readonly renderer = new RenderCapture(this.operations, this.activity, (page, url, navigated) => this.assertTarget(page, url, navigated));
+  private readonly operations = new BrowserOperationEngine(
+    (page, url, navigated) => this.assertTarget(page, url, navigated),
+    page => this.pageUrl(page)
+  );
+  private readonly renderer = new RenderCapture(
+    this.operations,
+    (page, url, navigated) => this.assertTarget(page, url, navigated),
+    page => this.pageUrl(page)
+  );
   private readonly evidence = new PickerEvidence(this.documents, this.pins,
     (page, options) => this.renderer.captureScreenshotBuffer(page, options),
     (page, url, changed) => this.assertTarget(page, url, changed), page => this.targetId(page),
@@ -136,19 +148,69 @@ export class CdpSessionManager {
     return id;
   }
 
+  public pageUrl(page: Page): string {
+    return this.authoritativeUrls.get(page) ?? page.url();
+  }
+
+  public async resolvePageInfo(page: Page): Promise<{ targetId: string; type: string; title: string; url: string }> {
+    const cdpInfo = await getCdpTargetInfo(page);
+    if (cdpInfo) {
+      if (cdpInfo.type === 'page' && cdpInfo.url) {
+        this.authoritativeUrls.set(page, cdpInfo.url);
+      }
+      const pwUrl = typeof (page as { url?: unknown }).url === 'function' ? page.url() : '';
+      setMainFrameCorrupted(page, pwUrl === '' || pwUrl !== cdpInfo.url);
+      return {
+        targetId: this.targetId(page),
+        type: cdpInfo.type,
+        title: cdpInfo.title || '(No Title)',
+        url: cdpInfo.url
+      };
+    }
+    return {
+      targetId: this.targetId(page),
+      type: 'page',
+      title: (typeof (page as { title?: unknown }).title === 'function' ? await page.title() : '') || '(No Title)',
+      url: typeof (page as { url?: unknown }).url === 'function' ? page.url() : ''
+    };
+  }
+
+  private async getPageTabs(context: BrowserContext): Promise<PageTabEntry[]> {
+    const pages = context.pages();
+    const tabs: PageTabEntry[] = [];
+    for (const p of pages) {
+      if (p.isClosed()) continue;
+      try {
+        const info = await this.resolvePageInfo(p);
+        if (info.type !== 'page') continue;
+        tabs.push({
+          page: p,
+          targetId: info.targetId,
+          title: info.title,
+          url: info.url
+        });
+      } catch {
+        // Tab closed while iterating open contexts.
+      }
+    }
+    return tabs;
+  }
+
   public assertTarget(page: Page, expectedUrl: string, documentChanged = false): void {
     this.operations.throwIfExpired();
-    if (documentChanged || page.isClosed() || this.page !== page || page.url() !== expectedUrl) {
+    const currentUrl = this.pageUrl(page);
+    if (documentChanged || page.isClosed() || this.page !== page || currentUrl !== expectedUrl) {
       throw new SpectorError('TARGET_CHANGED', 'Selected target changed during operation.', undefined, {
-        details: { documentChanged, urlChanged: !page.isClosed() && page.url() !== expectedUrl, expected: { targetId: this.targetId(page), url: evidenceUrl(expectedUrl) },
-          actual: this.page && !this.page.isClosed() ? { targetId: this.targetId(this.page), url: evidenceUrl(this.page.url()) } : null }
+        details: { documentChanged, urlChanged: !page.isClosed() && currentUrl !== expectedUrl, expected: { targetId: this.targetId(page), url: evidenceUrl(expectedUrl) },
+          actual: this.page && !this.page.isClosed() ? { targetId: this.targetId(this.page), url: evidenceUrl(this.pageUrl(this.page)) } : null }
       });
     }
   }
 
   public async captureMetadata(page: Page, selector?: string) {
-    return { targetId: this.targetId(page), documentId: this.documents.id(page), url: evidenceUrl(page.url()), selector,
-      viewport: await page.evaluate(() => ({ width: innerWidth, height: innerHeight })),
+    const info = await this.resolvePageInfo(page);
+    return { targetId: info.targetId, documentId: this.documents.id(page), url: evidenceUrl(info.url), selector,
+      viewport: await evaluateInPage(page, () => ({ width: innerWidth, height: innerHeight })),
       capturedAt: new Date().toISOString() };
   }
 
@@ -208,9 +270,10 @@ export class CdpSessionManager {
         await this.setupPageListeners(p);
       }
       if (this.page) {
+        const info = await this.resolvePageInfo(this.page);
         return {
-          title: (await this.page.title()) || '(No Title)',
-          url: this.page.url(),
+          title: info.title,
+          url: info.url,
           viewport: this.page.viewportSize()
         };
       }
@@ -241,22 +304,26 @@ export class CdpSessionManager {
       };
       this.context.on('page', this.contextPageListener);
 
-      const pages = this.context.pages();
-      if (pages.length === 0) {
-        this.page = await this.context.newPage();
+      const tabs = await this.getPageTabs(this.context);
+      if (tabs.length === 0) {
+        const fallbackPages = this.context.pages().filter(p => !p.isClosed());
+        this.page = fallbackPages.length === 0
+          ? await this.context.newPage()
+          : (autoSelectActiveTab ? fallbackPages[fallbackPages.length - 1] : fallbackPages[0]);
       } else {
-        this.page = autoSelectActiveTab ? pages[pages.length - 1] : pages[0];
+        this.page = (autoSelectActiveTab ? tabs[tabs.length - 1] : tabs[0]).page;
       }
 
-      for (const p of pages) {
+      for (const p of this.context.pages()) {
         if (!p.isClosed()) {
           await this.setupPageListeners(p);
         }
       }
 
+      const activeInfo = await this.resolvePageInfo(this.page);
       return {
-        title: (await this.page.title()) || '(No Title)',
-        url: this.page.url(),
+        title: activeInfo.title,
+        url: activeInfo.url,
         viewport: this.page.viewportSize()
       };
     } catch (error: unknown) {
@@ -274,10 +341,12 @@ export class CdpSessionManager {
   public async ensurePage(): Promise<Page> {
     const bound = this.operations.currentPage;
     if (bound) {
-      this.assertTarget(bound, bound.url());
+      if (this.browser) await this.resolvePageInfo(bound);
+      this.assertTarget(bound, this.pageUrl(bound));
       return bound;
     }
     if (this.page && !this.page.isClosed()) {
+      if (this.browser) await this.resolvePageInfo(this.page);
       return this.page;
     }
 
@@ -346,12 +415,12 @@ export class CdpSessionManager {
       if (!this.pageListeners.has(page)) return;
       const loc = msg.location();
       const locationStr = loc?.url ? `${loc.url}:${loc.lineNumber}` : undefined;
-      this.telemetry.addConsole(msg.type(), msg.text(), locationStr);
+      this.telemetry.addConsole(msg.type(), msg.text(), locationStr, this.targetId(page));
     });
 
     this.listenPage(page, 'pageerror', (error) => {
       if (!this.pageListeners.has(page)) return;
-      this.telemetry.addPageError(error.message, error.stack);
+      this.telemetry.addPageError(error.message, error.stack, this.targetId(page));
     });
 
     this.listenPage(page, 'request', (req) => {
@@ -379,7 +448,8 @@ export class CdpSessionManager {
           resourceType: req.resourceType(),
           status,
           statusText: res.statusText(),
-          durationMs
+          durationMs,
+          targetId: this.targetId(page)
         });
       } catch {
         // Response inspection skipped when frame is destroyed mid-flight.
@@ -398,7 +468,8 @@ export class CdpSessionManager {
           url: req.url(),
           resourceType: req.resourceType(),
           durationMs,
-          error: req.failure()?.errorText || 'Request failed'
+          error: req.failure()?.errorText || 'Request failed',
+          targetId: this.targetId(page)
         });
       } catch {
         // Request failure ignored during frame teardown.
@@ -410,32 +481,20 @@ export class CdpSessionManager {
 
   public async listTabs(): Promise<TabInfo[]> {
     const context = await this.ensureContext();
-    const pages = context.pages();
-    const tabs: TabInfo[] = [];
-
-    for (let i = 0; i < pages.length; i++) {
-      const p = pages[i];
-      if (!p.isClosed()) {
-        try {
-          tabs.push({
-            targetId: this.targetId(p),
-            index: i,
-            title: (await p.title()) || '(No Title)',
-            url: p.url(),
-            isActive: p === this.page
-          });
-        } catch {
-          // Tab closed while iterating open contexts.
-        }
-      }
-    }
-    return tabs;
+    const tabs = await this.getPageTabs(context);
+    return tabs.map((t, index) => ({
+      targetId: t.targetId,
+      index,
+      title: t.title,
+      url: t.url,
+      isActive: t.page === this.page
+    }));
   }
 
   public async selectTab(criteria: TabSelectCriteria): Promise<ActiveTabInfo> {
     const context = await this.ensureContext();
-    const pages = context.pages().filter(p => !p.isClosed());
-    if (pages.length === 0) {
+    const tabs = await this.getPageTabs(context);
+    if (tabs.length === 0) {
       throw new SpectorError('TAB_NOT_FOUND', 'No open tabs found in the browser.');
     }
 
@@ -453,56 +512,22 @@ export class CdpSessionManager {
       logger.warn('select_tab_multi_criteria', { provided: names, selectedBy: names[0] });
     }
 
-    const targetPage = await activeMatchers[0].matches(criteria, pages);
-    if (!targetPage) {
+    const targetTab = await activeMatchers[0].matches(criteria, tabs);
+    if (!targetTab) {
       throw new SpectorError('TAB_NOT_FOUND', `Target tab matching criteria ${JSON.stringify(criteria)} was not found.`);
     }
 
-    await targetPage.bringToFront();
-    this.page = targetPage;
+    await targetTab.page.bringToFront();
+    this.page = targetTab.page;
     await this.setupPageListeners(this.page);
+    const activeInfo = await this.resolvePageInfo(this.page);
 
     return {
-      title: (await this.page.title()) || '(No Title)',
-      url: this.page.url(),
+      title: activeInfo.title,
+      url: activeInfo.url,
       viewport: this.page.viewportSize(),
       ...(warning ? { warning } : {})
     };
-  }
-
-  public async navigate(
-    url: string,
-    waitUntil: 'load' | 'domcontentloaded' | 'networkidle' = 'load'
-  ): Promise<{ url: string; title: string }> {
-    const page = await this.ensurePage();
-    const options = { waitUntil, timeout: TIMEOUTS.NAVIGATION_DEFAULT_MS };
-
-    if (url === 'reload') {
-      await page.reload(options);
-    } else {
-      const effectiveUrl = /^[a-zA-Z]+:\/\//.test(url) ? url : `http://${url}`;
-      await page.goto(effectiveUrl, options);
-    }
-
-    return {
-      url: page.url(),
-      title: (await page.title()) || '(No Title)'
-    };
-  }
-
-  public async interact(
-    action: InteractAction,
-    selector?: string,
-    scrollDelta?: { x: number; y: number },
-    waitForTimeoutMs: number = 0,
-    value?: string,
-    expectedUrl?: string
-  ): Promise<string> {
-    const page = await this.ensurePage();
-    if (expectedUrl !== undefined) this.assertTarget(page, expectedUrl);
-    const result = await dispatchPageInteraction(page, { action, selector, scrollDelta, waitForTimeoutMs, value });
-    if (page.isClosed() || this.page !== page) throw new SpectorError('TARGET_CHANGED', 'Target changed after interaction; action may have occurred.');
-    return result;
   }
 
   public async captureScreenshotBuffer(
@@ -527,7 +552,7 @@ export class CdpSessionManager {
   ): Promise<PickedElementInfo[]> {
     const collected: PickedElementInfo[] = [];
     await this.operations.run(page, async () => {
-      this.assertTarget(page, page.url(), this.documents.id(page) !== documentId);
+      this.assertTarget(page, this.pageUrl(page), this.documents.id(page) !== documentId);
       for (const item of items) {
         const includeHoverState = typeof options.includeHoverState === 'function'
           ? options.includeHoverState(item)
@@ -562,9 +587,10 @@ export class CdpSessionManager {
     } = options;
     const documentId = this.documents.id(page);
 
-    await page.evaluate(OVERLAY_ENGINE_SCRIPT);
+    await evaluateInPage(page, OVERLAY_ENGINE_SCRIPT);
 
-    const rawResult: unknown = await this.activity.run(page, () => page.evaluate(
+    const rawResult: unknown = await evaluateInPage(
+      page,
       ({ timeout, withStyles, pinRole, selMode }) => {
         return (window as any).__spectorOverlay.start({
           source: 'tool',
@@ -575,7 +601,7 @@ export class CdpSessionManager {
         });
       },
       { timeout: timeoutMs, withStyles: includeStyles, pinRole: role, selMode: selectionMode }
-    ));
+    );
 
     const parsed = parsePickerPayload(rawResult);
     if (parsed.status !== 'selected') {
@@ -626,12 +652,97 @@ export class CdpSessionManager {
     return this.pins.clear();
   }
 
+  public async verifyPin(options: {
+    pinId?: string;
+    includeScreenshot?: boolean;
+  } = {}): Promise<{ report: PinVerificationReport; screenshotBase64?: string }> {
+    const pin = this.pins.findForVerify(options.pinId);
+    if (!pin || !pin.selector) {
+      throw new SpectorError(
+        'NO_PICKED_ELEMENT',
+        options.pinId
+          ? `No verifiable element pin found with id "${options.pinId}".`
+          : 'No verifiable element pin is cached in Spector.',
+        'Pin an element with Alt+P or spector_picker({ action: "pick" }) before running action: "verify".'
+      );
+    }
+
+    const page = await this.ensurePage();
+    const selector = pin.selector;
+    const escaped = escapeTailwindSelector(selector);
+    const includeScreenshot = options.includeScreenshot ?? true;
+
+    return await this.operations.run(page, async () => {
+      const snapshotScript = `(() => {
+        ${IN_BROWSER_BLUEPRINT_EXTRACTOR_FN}
+        const el = document.querySelector(${JSON.stringify(escaped)});
+        if (!el) return null;
+        const bp = extractDesignBlueprint(el, true, ${BLUEPRINT_LIMITS.maxSubtreeElements}, ${BLUEPRINT_LIMITS.maxInlineSvgBytes});
+        return { rect: bp.rect, computedStyles: bp.computedStyles };
+      })()`;
+
+      const afterSnapshot = await evaluateInPage(page, snapshotScript) as {
+        rect?: BoundingRect;
+        computedStyles?: Record<string, string>;
+      } | null;
+
+      if (!afterSnapshot) {
+        return {
+          report: {
+            status: 'element_not_found',
+            pinId: pin.id,
+            selector,
+            ...(pin.note ? { note: pin.note } : {}),
+            changed: true,
+            styleChanges: {},
+            verifiedAt: new Date().toISOString()
+          }
+        };
+      }
+
+      const afterForensics = await collectPinForensics(
+        page,
+        selector,
+        this.operations.remainingTime(TIMEOUTS.CDP_CONNECT_MS)
+      ).catch(() => undefined);
+
+      const report = computePinVerificationDiff(pin, {
+        rect: afterSnapshot.rect,
+        computedStyles: afterSnapshot.computedStyles,
+        forensics: afterForensics
+      });
+
+      let screenshotBase64: string | undefined;
+      if (includeScreenshot) {
+        try {
+          const buf = await this.renderer.captureScreenshotBuffer(page, { selector });
+          screenshotBase64 = buf.toString('base64');
+        } catch (err: unknown) {
+          logger.warn('verify_pin_screenshot_fallback', {
+            selector,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        }
+      }
+
+      return { report, ...(screenshotBase64 ? { screenshotBase64 } : {}) };
+    });
+  }
+
   public async withBreakpointMetrics<T>(
     breakpoints: BreakpointPreset[],
     runner: (bp: BreakpointPreset, dims: { width: number; height: number }, cdp: CDPSession) => Promise<T>,
     target?: Page
   ): Promise<T[]> {
     return this.renderer.withBreakpointMetrics(breakpoints, runner, target ?? await this.ensurePage());
+  }
+
+  public async withEmulatedMedia<T>(
+    media: import('../types.js').EmulatedMediaOptions | undefined,
+    runner: () => Promise<T>,
+    target?: Page
+  ): Promise<T> {
+    return this.renderer.withEmulatedMedia(target ?? await this.ensurePage(), media, runner);
   }
 
   private async setupHotkeyPicker(page: Page): Promise<void> {
@@ -662,9 +773,7 @@ export class CdpSessionManager {
             id: pin.id,
             role: pin.role,
             pinMode: pin.pinMode,
-            selector: pin.selector,
-            component: pin.frameworkComponent?.componentName,
-            sourceFile: pin.frameworkComponent?.sourceFile
+            selector: pin.selector
           });
         }
       });
@@ -679,7 +788,7 @@ export class CdpSessionManager {
     }
 
     try {
-      await page.evaluate(HOTKEY_BINDING_SCRIPT);
+      await evaluateInPage(page, HOTKEY_BINDING_SCRIPT);
     } catch {
       // Document not yet ready on empty initial tab.
     }
@@ -687,7 +796,6 @@ export class CdpSessionManager {
 
   public async disconnect(): Promise<void> {
     this.documents.clear();
-    await this.activity.clear();
     if (this.pendingPageSetups.size > 0) {
       await Promise.allSettled([...this.pendingPageSetups]);
       this.pendingPageSetups.clear();

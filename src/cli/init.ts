@@ -4,114 +4,38 @@ import { SPECTOR_VERSION } from '../constants.js';
 
 export const SPECTOR_SKILL_CONTENT = `---
 name: spector-inspect
-description: Live browser sharing, physical Chrome CDP attachment, Design Blueprint extraction (full typography, subtree summary, :hover deltas), multi-pin A/B comparison, Global Design DNA token extraction, layout/cascade forensics, multi-breakpoint screenshots, and temporary CSS preview using Spector.
+description: Human-to-AI visual annotation (Alt+P overlay picker, A/B pin comparison) and CSS/layout forensics on the developer's live physical Chrome via CDP.
 ---
 
-# Skill: Spector Browser Inspector (\`spector-inspect\`)
+# Skill: Spector Visual Bridge (\`spector-inspect\`)
 
-> Use this skill when working with the developer's live Google Chrome session via **Spector** — a Perceptual Design & UI Forensics Compiler that bridges visual intent, live browser rendering, and your workspace code tools.
-
----
+> Use this skill when working with the developer's live Google Chrome session via **Spector** — a Human-to-AI Visual Annotation & CSS Forensics Bridge.
 
 ## 1. Core Operating Principles
 
-1. **Physical Browser Reality & Companion Interop (CDP First):**
-   - Spector attaches directly to Chrome via CDP (\`http://localhost:9222\` or \`ws://127.0.0.1:...\` from \`agent-browser get cdp-url\`).
-   - Authentication cookies, session storage, CSRF tokens, and local domains (\`localhost:port\`, \`.test\`, Docker) are preserved.
-   - When paired with \`agent-browser\`, delegate navigation, clicking, form filling, scrolling, and video recording (\`agent-browser record\`) to \`agent-browser\` (\`--cdp 9222\` / \`--auto-connect\`), then sync the active tab in Spector with \`spector_tabs({ latest: true })\` or \`spector_tabs({ url: "..." })\`.
-2. **Spector Observes Browser, You Own the Codebase:**
-   - Spector reports framework component hints (\`componentName\`, normalized \`sourceFile\`, \`sourceLine\`) without probing local disk.
-   - Use workspace code tools (\`strata-mcp\`, \`septum\`, \`read_file\`, \`rg\`) to open and edit the exact project files.
-3. **Token-Lean, Distilled Evidence:**
-   - Never dump raw \`outerHTML\`. Use \`spector_picker\`, \`spector_extract_tokens\`, and \`spector_diagnose\` for non-default, deduplicated design & diagnostic telemetry. (Run Spector with \`--profile forensics\` when paired with \`agent-browser\` to keep only the 7 core forensics tools.)
-4. **Point-and-Prompt Fast Path:**
-   - Whenever the user refers to *"the element I clicked"*, *"compare this with that"*, or pinned items via \`Alt + P\`, **always call \`spector_picker\` first**.
+1. **Physical Chrome Reality (CDP First):**
+   - Spector attaches directly to the developer's Chrome via CDP (\`http://localhost:9222\`).
+   - Cookies, auth sessions, and local domains (\`localhost:port\`, \`.test\`) are preserved.
+2. **Point-and-Prompt Fast Path:**
+   - Whenever the user refers to *"the element I clicked"*, *"compare this with that"*, or pinned items via \`Alt + P\`, **always call \`spector_picker({ action: "get" })\` first**.
+3. **Structured CSS Forensics over Pixel Guessing:**
+   - Use \`spector_diagnose({ selector, breakpoints })\` to inspect CSS cascade winners/overrides, horizontal overflow culprits, sticky/clipping traps, z-index stacking traps, and active-tab console/network errors.
 
----
+## 2. Core Tools (5 Tools)
 
-## 2. Workflows & Decision Matrix
-
-### Workflow A: Point-and-Prompt & Design Blueprint Inspection
-1. Developer presses \`Alt + P\` in Chrome (single click, Region drag, Queue multi-pin, or optional 1-line Quick Note).
-2. AI calls:
-   \`\`\`typescript
-   spector_picker({ action: "get", clearAfterRead: false, includeHoverState: true })
-   \`\`\`
-3. AI receives the **Design Blueprint**:
-   - CSS selector, bounding rect, and quick note (if provided)
-   - Framework component hint + normalized \`sourceFile\` path
-   - Full distilled \`computedStyles\` (typography, flex/grid layout, surfaces, gradients, \`backdropFilter\`)
-   - \`hoverState\` delta + CSS \`transition\`
-   - Deduplicated \`subtreeSummary\` + \`<svg>\` (inline markup when <= 2 KB) and \`<img>\` asset metadata
-   - Scoped semantic DOM tree + cropped PNG screenshot
-
-### Workflow B: Cross-Tab Reference Comparison (A vs B) & Design DNA
-When replicating or aligning with a reference website in another tab:
-1. Switch to reference tab or extract its Design DNA directly:
-   \`\`\`typescript
-   spector_tabs({ action: "list" })
-   spector_tabs({ action: "select", url: "*reference-site*" })
-   spector_extract_tokens()
-   \`\`\`
-2. Developer pins **Ref (B)** on the reference tab and **Target (A)** on the local project tab using \`Alt + P\` (or AI triggers \`spector_picker({ action: "pick", role: "reference" })\` / \`spector_picker({ action: "pick", role: "target" })\`).
-3. Call \`spector_picker({ action: "get", includeHoverState: true })\` to receive both pins plus a computed \`comparison\` diff (\`dimensionDelta\`, \`styleDiffs\`, \`hoverDiffs\`).
-
-### Workflow C: Unified Layout Forensics, CSS Cascade & Runtime Health
-When CSS is not behaving as expected (horizontal scrollbars, sticky not sticking, z-index hidden, broken images/fonts, or runtime errors):
-\`\`\`typescript
-spector_diagnose({
-  selector: "#problem-element",
-  breakpoints: ["mobile", "tablet", "desktop"],
-  consoleLevel: "error",
-  clearLogs: true
-})
-\`\`\`
-Returns:
-- Deduplicated console errors + failed network requests (\`>= 400\` or \`requestfailed\`, pathname-only)
-- Horizontal overflow culprits, sticky/content clipping traps, z-index stacking traps, broken media, and font errors
-- CDP CSS cascade breakdown (winning rule vs overridden rules)
-- Multi-breakpoint overflow summary (automatically restores original viewport)
-
-### Workflow D: Multi-Breakpoint Visual Verification & Ephemeral CSS Preview
-1. Test CSS ideas safely in the live tab before touching project files:
-   \`\`\`typescript
-   spector_preview_css({ action: "apply", css: ".hero-cta { padding: 14px 28px; }" })
-   \`\`\`
-   (Remember to run \`spector_preview_css({ action: "clear" })\` before final verification.)
-2. Capture visual verification across viewports:
-   \`\`\`typescript
-   spector_capture_screenshot({ breakpoints: ["mobile", "desktop"] })
-   \`\`\`
-
-### Workflow E: Opening Interactive UI States & DOM Mapping
-\`\`\`typescript
-// Open a dropdown/hover menu or scroll a container
-spector_interact({ action: "click", selector: "#dropdown-trigger", waitForTimeoutMs: 150 })
-spector_interact({ action: "hover", selector: ".pricing-card" })
-
-// Inspect semantic DOM hierarchy (preserves Tailwind utility classes)
-spector_get_dom_tree({ selector: "#app", maxDepth: 6 })
-\`\`\`
-
----
-
-## 3. Playbook Guardrails
-
-| Anti-Pattern | Why It Is Prohibited | Recommended Action |
-| :--- | :--- | :--- |
-| **Pixel Guessing from Screenshots** | Leads to wrong spacing, fonts, and colors. | Use \`spector_picker\` / \`spector_extract_tokens\`. |
-| **Blind CSS Tweaks** | Misses clipping ancestors, cascade overrides, and mobile overflow. | Run \`spector_diagnose({ selector, breakpoints })\`. |
-| **Guessing Selectors** | Fragile targeting. | Obtain selectors from \`spector_picker\` or \`spector_get_dom_tree\`. |
-| **Forcing Re-Login** | Breaks developer auth session. | Reuse the attached physical Chrome CDP session. |
+- \`spector_attach\`: Connect to physical Chrome via CDP.
+- \`spector_tabs\`: List open Chrome tabs or switch the active tab by index, URL, title, or \`latest: true\`.
+- \`spector_picker\`: Retrieve \`Alt + P\` pinned blueprint(s) & A/B diffs (\`action: "get"\`), launch the interactive overlay (\`action: "pick"\`), or clear the pin queue (\`action: "clear"\`).
+- \`spector_diagnose\`: Run layout traps, CDP CSS cascade analysis, multi-breakpoint overflow checks, and active-tab runtime errors.
+- \`spector_capture_screenshot\`: Capture the active tab, a selector, or responsive breakpoints (\`mobile\`, \`tablet\`, \`desktop\`) with optional \`colorScheme\` / \`reducedMotion\` emulation.
 `;
 
 export function handleInitCommand(): void {
   const cwd = process.cwd();
-  console.log(`\n🚀 Initializing Spector ${SPECTOR_VERSION} in current workspace...`);
-  console.log(`📁 Target directory: ${cwd}\n`);
+  console.log(`\nInitializing Spector ${SPECTOR_VERSION} in current workspace...`);
+  console.log(`Target directory: ${cwd}\n`);
 
   const createdPaths: string[] = [];
-
   const agentsSkillDir = path.join(cwd, '.agents', 'skills', 'spector-inspect');
   const agentsSkillFile = path.join(agentsSkillDir, 'SKILL.md');
 
@@ -120,7 +44,7 @@ export function handleInitCommand(): void {
     fs.writeFileSync(agentsSkillFile, SPECTOR_SKILL_CONTENT, 'utf8');
     createdPaths.push(path.relative(cwd, agentsSkillFile));
   } catch (err: unknown) {
-    console.error(`❌ Failed to write ${agentsSkillFile}: ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`Failed to write ${agentsSkillFile}: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const cursorDir = path.join(cwd, '.cursor');
@@ -137,12 +61,10 @@ export function handleInitCommand(): void {
   }
 
   for (const p of createdPaths) {
-    console.log(`  ✅ Injected: ${p}`);
+    console.log(`  Created: ${p}`);
   }
 
   console.log(`
-🎉 Spector skill successfully initialized!
-
 Next Step: Add Spector to your MCP Client Configuration:
 
   "mcpServers": {
@@ -151,16 +73,12 @@ Next Step: Add Spector to your MCP Client Configuration:
       "args": ["-y", "@dimassetoid/spector", "serve"]
     }
   }
-
-💡 Tip: Start Google Chrome with:
-  chrome --remote-debugging-port=9222
-or simply call any spector tool; Spector will automatically launch Chrome for you!
 `);
 }
 
 export function handleHelpCommand(): void {
   console.log(`
-spector — Perceptual Design & UI Forensics Compiler MCP Server
+spector — Human-to-AI Visual Annotation & CSS Forensics MCP Server
 
 Usage:
   spector [command] [options]
@@ -171,9 +89,8 @@ Commands:
   init          Inject spector-inspect SKILL.md into .agents/skills/ in current project
 
 Options:
-  --profile <forensics|full>  Tool profile for serve (default: forensics; use full for navigate/dom_tree/interact)
-  --help, -h                  Show this help message
-  --version, -v               Show version
+  --help, -h    Show this help message
+  --version, -v Show version
 
 Use spector serve in your MCP client configuration. The client launches Spector
 and communicates through stdin/stdout; no HTTP listener is opened.

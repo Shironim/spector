@@ -69,4 +69,18 @@ export class PinStore {
     const ids = new Set(pins.map(pin => pin.id));
     this.queue = this.queue.filter(pin => !ids.has(pin.id));
   }
+
+  public findForVerify(pinId?: string): PickedElementInfo | undefined {
+    if (pinId) {
+      const exact = this.queue.find(p => p.id === pinId);
+      return exact ? structuredClone(exact) : undefined;
+    }
+    const candidates = this.queue.filter(p => p.selector && p.pinMode !== 'region');
+    if (candidates.length === 0) return undefined;
+    const preferred =
+      candidates.find(p => p.role === 'target') ??
+      candidates.find(p => p.role === 'single') ??
+      candidates[candidates.length - 1];
+    return structuredClone(preferred);
+  }
 }

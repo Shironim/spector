@@ -210,11 +210,11 @@ describe('Spector v2 Security & Reliability Invariants', () => {
     manager.setupPageListeners(page);
 
     assert.equal(page.handlers.has('console'), false);
-    await manager.navigate('https://fixture.invalid/');
+    await page.goto('https://fixture.invalid/');
     assert.equal(page.handlers.get('console')!.length, 1);
     assert.equal(page.handlers.get('request')!.length, 1);
 
-    await manager.navigate('reload');
+    await page.reload();
     assert.equal(page.handlers.get('console')!.length, 1);
     page.handlers.get('console')![0]({
       type: () => 'log',

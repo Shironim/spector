@@ -5,6 +5,7 @@ import { join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { coreToolNames } from '../tool-contract.js';
 
 const entry = resolve(import.meta.dir, '../../src/index.ts');
 const run = (args: string[], cwd?: string) => spawnSync(process.execPath, [entry, ...args], {
@@ -23,7 +24,7 @@ describe('Spector CLI', () => {
   });
 
   it('rejects unknown commands and extra arguments before performing init or startup', () => {
-    for (const args of [['sevre'], ['serve', '--port', '3000'], ['serve', '--profile', 'bogus'], ['serve', '--profile'], ['serve', 'init'], ['init', 'serve'], ['init', '--profile', 'forensics'], ['--help', 'oops']]) {
+    for (const args of [['sevre'], ['serve', '--port', '3000'], ['serve', '--profile', 'full'], ['serve', 'init'], ['init', 'serve'], ['--help', 'oops']]) {
       const result = run(args);
       expect(result.status).toBe(1);
       expect(result.stdout).toBe('');
@@ -32,31 +33,17 @@ describe('Spector CLI', () => {
     }
   });
 
-  it('defaults to forensics profile over stdio MCP and exposes all tools with --profile full', async () => {
+  it('exposes the 5 core tools over stdio MCP for serve and bare alias', async () => {
     for (const args of [[entry, 'serve'], [entry]]) {
       const transport = new StdioClientTransport({ command: process.execPath, args, stderr: 'pipe' });
-      const client = new Client({ name: 'cli-default-profile', version: '1.0.0' });
+      const client = new Client({ name: 'cli-core-tools', version: '1.0.0' });
       try {
         await client.connect(transport, { timeout: 5000 });
-        const names = (await client.listTools()).tools.map(tool => tool.name);
-        expect(names).toContain('spector_diagnose');
-        expect(names).not.toContain('spector_interact');
-        expect(names).not.toContain('spector_navigate');
+        const names = (await client.listTools()).tools.map(tool => tool.name).sort();
+        expect(names).toEqual(coreToolNames);
       } finally { await client.close(); }
     }
-
-    for (const args of [[entry, 'serve', '--profile', 'full'], [entry, '--profile=full']]) {
-      const transport = new StdioClientTransport({ command: process.execPath, args, stderr: 'pipe' });
-      const client = new Client({ name: 'cli-full-profile', version: '1.0.0' });
-      try {
-        await client.connect(transport, { timeout: 5000 });
-        const names = (await client.listTools()).tools.map(tool => tool.name);
-        expect(names).toContain('spector_diagnose');
-        expect(names).toContain('spector_interact');
-        expect(names).toContain('spector_navigate');
-      } finally { await client.close(); }
-    }
-  }, 20000);
+  }, 15000);
 
   it('prints the standard MCP configuration from init', () => {
     const dir = mkdtempSync(join(tmpdir(), 'spector-init-'));
