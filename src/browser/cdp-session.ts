@@ -97,6 +97,62 @@ export function evidenceUrl(raw: string): string {
   } catch { return '[UNAVAILABLE]'; }
 }
 
+export function validateNavigationUrl(rawUrl: string, currentUrl?: string): string {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    throw new SpectorError('INVALID_TOOL_INPUT', 'url is required when action is "navigate".');
+  }
+
+  let base: string | undefined;
+  let currentParsed: URL | undefined;
+  if (currentUrl) {
+    try {
+      const candidate = new URL(currentUrl);
+      if (candidate.protocol === 'http:' || candidate.protocol === 'https:') {
+        base = candidate.toString();
+        currentParsed = candidate;
+      }
+    } catch {
+      // Ignore non-parseable currentUrl.
+    }
+  }
+
+  let parsed: URL;
+  try {
+    parsed = base ? new URL(trimmed, base) : new URL(trimmed);
+  } catch {
+    throw new SpectorError('INVALID_TOOL_INPUT', `Invalid navigation URL "${rawUrl}".`);
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new SpectorError(
+      'NAVIGATION_DENIED',
+      `Protocol "${parsed.protocol}" is not allowed for spector_tabs navigation.`
+    );
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isLocalDevHost =
+    host === 'localhost' ||
+    host === '127.0.0.1' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    host.endsWith('.localhost') ||
+    host.endsWith('.test') ||
+    host.endsWith('.local');
+
+  const isSameOrigin = Boolean(currentParsed && parsed.origin === currentParsed.origin);
+
+  if (!isLocalDevHost && !isSameOrigin) {
+    throw new SpectorError(
+      'NAVIGATION_DENIED',
+      `Navigation to external origin "${parsed.origin}" is blocked (allowed: localhost/local dev hosts or same-origin as active tab).`
+    );
+  }
+
+  return parsed.toString();
+}
+
 export class CdpSessionManager {
   private static instance: CdpSessionManager | null = null;
 
@@ -530,6 +586,68 @@ export class CdpSessionManager {
     };
   }
 
+  public async navigateTab(options: {
+    url: string;
+    waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
+    openInNewTab?: boolean;
+    timeoutMs?: number;
+  }): Promise<ActiveTabInfo> {
+    const currentPage = await this.ensurePage();
+    const currentUrl = this.pageUrl(currentPage);
+    const resolvedUrl = validateNavigationUrl(options.url, currentUrl);
+    const waitUntil = options.waitUntil ?? 'load';
+    const timeout = options.timeoutMs ?? TIMEOUTS.NAVIGATION_DEFAULT_MS;
+
+    if (options.openInNewTab) {
+      const context = await this.ensureContext();
+      const newPage = await context.newPage();
+      this.page = newPage;
+      await this.setupPageListeners(newPage);
+      await this.operations.run(
+        newPage,
+        async () => {
+          await newPage.goto(resolvedUrl, { waitUntil, timeout });
+        },
+        { allowNavigation: true, timeoutMs: timeout }
+      );
+      await newPage.bringToFront();
+      await this.setupPageListeners(newPage);
+      const info = await this.resolvePageInfo(newPage);
+      return { title: info.title, url: info.url, viewport: newPage.viewportSize() };
+    }
+
+    await this.operations.run(
+      currentPage,
+      async () => {
+        await currentPage.goto(resolvedUrl, { waitUntil, timeout });
+      },
+      { allowNavigation: true, timeoutMs: timeout }
+    );
+    await this.setupPageListeners(currentPage);
+    const info = await this.resolvePageInfo(currentPage);
+    return { title: info.title, url: info.url, viewport: currentPage.viewportSize() };
+  }
+
+  public async reloadTab(options: {
+    waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
+    timeoutMs?: number;
+  } = {}): Promise<ActiveTabInfo> {
+    const page = await this.ensurePage();
+    const waitUntil = options.waitUntil ?? 'load';
+    const timeout = options.timeoutMs ?? TIMEOUTS.NAVIGATION_DEFAULT_MS;
+
+    await this.operations.run(
+      page,
+      async () => {
+        await page.reload({ waitUntil, timeout });
+      },
+      { allowNavigation: true, timeoutMs: timeout }
+    );
+    await this.setupPageListeners(page);
+    const info = await this.resolvePageInfo(page);
+    return { title: info.title, url: info.url, viewport: page.viewportSize() };
+  }
+
   public async captureScreenshotBuffer(
     page: Page,
     options: { selector?: string; fullPage?: boolean; clip?: { x: number; y: number; width: number; height: number }; timeoutMs?: number } = {}
@@ -650,6 +768,76 @@ export class CdpSessionManager {
 
   public clearPins(): number {
     return this.pins.clear();
+  }
+
+  public async snapshotSelector(options: {
+    selector: string;
+    role?: PinRole;
+    note?: string;
+    includeScreenshot?: boolean;
+    includeHoverState?: boolean;
+  }): Promise<{ pin: PickedElementInfo; comparison?: ComparisonDiff }> {
+    const rawSelector = options.selector.trim();
+    if (!rawSelector) {
+      throw new SpectorError('INVALID_TOOL_INPUT', 'selector is required when action is "snapshot".');
+    }
+    const page = await this.ensurePage();
+    const escaped = escapeTailwindSelector(rawSelector);
+    const role: PinRole = options.role ?? 'single';
+    const includeScreenshot = options.includeScreenshot ?? false;
+    const includeHoverState = options.includeHoverState ?? false;
+
+    return await this.operations.run(page, async () => {
+      const extractScript = `(() => {
+        ${IN_BROWSER_BLUEPRINT_EXTRACTOR_FN}
+        const el = document.querySelector(${JSON.stringify(escaped)});
+        if (!el) return null;
+        const bp = extractDesignBlueprint(el, true, ${BLUEPRINT_LIMITS.maxSubtreeElements}, ${BLUEPRINT_LIMITS.maxInlineSvgBytes});
+        return {
+          tagName: el.tagName ? el.tagName.toLowerCase() : undefined,
+          rect: bp.rect,
+          computedStyles: bp.computedStyles,
+          subtreeSummary: bp.subtreeSummary,
+          assets: bp.assets
+        };
+      })()`;
+
+      const extracted = await evaluateInPage(page, extractScript) as {
+        tagName?: string;
+        rect?: BoundingRect;
+        computedStyles?: Record<string, string>;
+        subtreeSummary?: PickedElementInfo['subtreeSummary'];
+        assets?: PickedElementInfo['assets'];
+      } | null;
+
+      if (!extracted) {
+        throw new SpectorError('ELEMENT_NOT_READY', `Element not found for snapshot selector "${rawSelector}".`);
+      }
+
+      const collected = await this.evidence.collect(
+        page,
+        {
+          status: 'selected',
+          role,
+          pinMode: 'element',
+          selector: rawSelector,
+          ...(options.note ? { note: options.note } : {}),
+          ...(extracted.tagName ? { tagName: extracted.tagName } : {}),
+          ...(extracted.rect ? { rect: extracted.rect } : {}),
+          ...(extracted.computedStyles ? { computedStyles: extracted.computedStyles } : {}),
+          ...(extracted.subtreeSummary ? { subtreeSummary: extracted.subtreeSummary } : {}),
+          ...(extracted.assets ? { assets: extracted.assets } : {})
+        },
+        { includeScreenshot, includeHoverState, includeForensics: true }
+      );
+
+      this.pins.add(collected);
+      const comparison = this.pins.buildComparison();
+      return {
+        pin: collected,
+        ...(comparison ? { comparison } : {})
+      };
+    });
   }
 
   public async verifyPin(options: {

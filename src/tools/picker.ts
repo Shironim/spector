@@ -53,10 +53,18 @@ function buildPickedResponse(pins: PickedElementInfo[], comparison?: unknown, in
 export function registerPickerTools(server: McpServer, manager: CdpSessionManager): void {
   const pickerSchema = {
     action: z
-      .enum(['get', 'pick', 'verify', 'clear'])
+      .enum(['get', 'pick', 'snapshot', 'verify', 'clear'])
       .optional()
       .default('get')
-      .describe('"get" retrieves Alt+P pinned blueprint(s)/comparison; "pick" launches interactive overlay; "verify" re-checks a pinned selector after code edits and returns Before vs After rect/style/forensics deltas; "clear" empties pin queue (default: "get")'),
+      .describe('"get" retrieves Alt+P pinned blueprint(s)/comparison; "pick" launches interactive overlay; "snapshot" programmatically pins a CSS selector as a Before/After baseline (no Alt+P needed); "verify" re-checks a pinned/snapshotted selector after code edits and returns Before vs After rect/style/forensics deltas; "clear" empties pin queue (default: "get")'),
+    selector: z
+      .string()
+      .optional()
+      .describe('Target CSS selector to capture when action is "snapshot" (e.g. "main", "#pricing-card")'),
+    note: z
+      .string()
+      .optional()
+      .describe('Optional label/note attached to a programmatic snapshot when action is "snapshot"'),
     pinId: z
       .string()
       .optional()
@@ -117,7 +125,9 @@ export function registerPickerTools(server: McpServer, manager: CdpSessionManage
       }
     },
     instrumentHandler<{
-      action?: 'get' | 'pick' | 'verify' | 'clear';
+      action?: 'get' | 'pick' | 'snapshot' | 'verify' | 'clear';
+      selector?: string;
+      note?: string;
       pinId?: string;
       includeScreenshot?: boolean;
       clearAfterRead?: boolean;
@@ -129,6 +139,8 @@ export function registerPickerTools(server: McpServer, manager: CdpSessionManage
       selectionMode?: PinSelectionMode;
     }>('spector_picker', async ({
       action,
+      selector,
+      note,
       pinId,
       includeScreenshot,
       clearAfterRead,
@@ -142,6 +154,24 @@ export function registerPickerTools(server: McpServer, manager: CdpSessionManage
       if (action === 'clear') {
         const cleared = manager.clearPins();
         return envelopeResponse(true, `Cleared ${cleared} pinned item(s) from Spector queue.`, { cleared });
+      }
+
+      if (action === 'snapshot') {
+        if (!selector || !selector.trim()) {
+          return failSafeResponse(
+            'spector_picker',
+            new SpectorError('INVALID_TOOL_INPUT', 'selector is required when action is "snapshot".'),
+            'Provide a valid CSS selector, e.g. spector_picker({ action: "snapshot", selector: "main" }).'
+          );
+        }
+        const snap = await manager.snapshotSelector({
+          selector,
+          role: role ?? 'single',
+          note,
+          includeScreenshot: includeScreenshot ?? false,
+          includeHoverState: includeHoverState ?? false
+        });
+        return enforceResponseBudget(buildPickedResponse([snap.pin], snap.comparison, includeScreenshot ?? false));
       }
 
       if (action === 'verify') {
