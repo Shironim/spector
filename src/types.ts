@@ -201,9 +201,11 @@ export interface ComparisonDiff {
 }
 
 export interface ScanCoverage {
-  scope: 'document-light-dom';
+  scope: 'document-light-dom' | 'scoped-light-dom';
+  rootSelector?: string;
   candidateElements: number;
   visitedElements: number;
+  skippedHiddenElements?: number;
   elementLimitReached: boolean;
   excluded: string[];
 }
@@ -286,6 +288,8 @@ export interface CssCascadeEntry {
 export interface CssCascadeReport {
   selector: string;
   properties: Record<string, CssCascadeEntry>;
+  note?: string;
+  computedSummary?: Record<string, string>;
   pseudoElements?: {
     before?: Record<string, CssCascadeEntry>;
     after?: Record<string, CssCascadeEntry>;
@@ -309,7 +313,89 @@ export interface BreakpointAuditItem {
   hasHorizontalOverflow: boolean;
   overflowCulpritsCount: number;
   topCulprit?: string;
+  touchTargetIssuesCount?: number;
   targetLayout?: BreakpointTargetLayout;
+}
+
+export interface ContrastIssueItem {
+  selector: string;
+  textSample: string;
+  color: string;
+  backgroundColor: string;
+  ratio: number;
+  requiredRatio: number;
+  fontSize: string;
+  fontWeight: string;
+}
+
+export interface TouchTargetIssueItem {
+  selector: string;
+  tag: string;
+  width: number;
+  height: number;
+  minRequired: number;
+}
+
+export interface MissingNameIssueItem {
+  selector: string;
+  tag: string;
+  role?: string;
+  reason: string;
+}
+
+export interface HeadingIssueItem {
+  selector: string;
+  tag: string;
+  issue: 'multiple-h1' | 'skipped-level';
+  detail: string;
+}
+
+export interface AccessibilityForensicsReport {
+  coverage: {
+    scope: 'document-light-dom' | 'scoped-light-dom';
+    rootSelector?: string;
+    scannedElements: number;
+    skippedHiddenElements?: number;
+    unverifiableContrastCount: number;
+    touchTargetsChecked: boolean;
+    issueLimitPerCategory: number;
+  };
+  contrastIssues: ContrastIssueItem[];
+  touchTargetIssues: TouchTargetIssueItem[];
+  missingNames: MissingNameIssueItem[];
+  headingIssues: HeadingIssueItem[];
+}
+
+export interface TokenFrequencyItem {
+  value: string;
+  count: number;
+}
+
+export interface DesignTokenAuditReport {
+  coverage: {
+    scope: 'document-light-dom' | 'scoped-light-dom';
+    rootSelector?: string;
+    scannedElements: number;
+    skippedHiddenElements?: number;
+    limitReached: boolean;
+  };
+  typography: {
+    uniqueFontFamilies: string[];
+    fontSizes: TokenFrequencyItem[];
+    fontWeights: TokenFrequencyItem[];
+  };
+  colors: {
+    backgrounds: TokenFrequencyItem[];
+    textColors: TokenFrequencyItem[];
+    borderColors: TokenFrequencyItem[];
+  };
+  radii: TokenFrequencyItem[];
+  spacing: {
+    paddings: TokenFrequencyItem[];
+    gaps: TokenFrequencyItem[];
+  };
+  cssVariables: Record<string, string>;
+  slopSignals: string[];
 }
 
 export interface DiagnoseReport {
@@ -321,6 +407,8 @@ export interface DiagnoseReport {
     failedNetwork: NetworkLogEntry[];
   };
   layoutForensics: LayoutForensicsReport;
+  accessibility?: AccessibilityForensicsReport;
+  designTokens?: DesignTokenAuditReport;
   cssCascade?: CssCascadeReport;
   breakpointAudits?: BreakpointAuditItem[];
 }
@@ -329,6 +417,7 @@ export type SpectorErrorCode =
   | 'RESOURCE_LIMIT_EXCEEDED'
   | 'TARGET_CHANGED'
   | 'VIEWPORT_RESTORE_FAILED'
+  | 'NAVIGATION_DENIED'
   | 'CDP_ENDPOINT_DENIED'
   | 'INVALID_CDP_ENDPOINT'
   | 'BROWSER_CONTEXT_UNAVAILABLE'

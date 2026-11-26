@@ -37,6 +37,10 @@ const SPECTOR_ERROR_CATALOG: Record<SpectorErrorCode, ErrorCatalogEntry> = {
     reason: 'The selected page closed or the target/URL changed. An action may already have occurred; it was not retried.',
     defaultRecommendation: 'List tabs and explicitly select the intended target, then verify its URL before continuing.'
   },
+  NAVIGATION_DENIED: {
+    reason: 'Navigation to this URL is blocked by Spector read-safe origin policy.',
+    defaultRecommendation: 'Navigate only to local dev hosts (localhost, 127.0.0.1, ::1, *.test, *.local) or same-origin routes of the active tab.'
+  },
   CDP_ENDPOINT_DENIED: {
     reason: 'The configured Chrome debugging endpoint is blocked by Spector security policy.',
     defaultRecommendation: 'Use a local Chrome CDP endpoint such as http://localhost:9222.'
