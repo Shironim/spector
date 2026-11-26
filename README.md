@@ -4,21 +4,26 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](LICENSE)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green.svg?style=flat-square)](https://modelcontextprotocol.io)
 
-**Spector** is a **Human-to-AI Visual Annotation & CSS Forensics MCP Server** for your live physical Google Chrome session via Chrome DevTools Protocol (CDP). Point at any element or region with `Alt + P`, add an optional note, and hand your AI coding agent a distilled Design Blueprint with auto-attached CSS/layout forensics — then verify Before vs After diffs deterministically after code edits.
+**Spector** is a visual annotation and CSS forensics MCP server for your live Google Chrome session over Chrome DevTools Protocol (CDP). Point at any element or region with `Alt + P`, add an optional note, and give your AI coding agent a Design Blueprint with computed CSS and layout forensics — then verify Before vs After diffs after edits. Works across Vue, Nuxt, React, Next.js, Svelte, and plain HTML.
 
 ---
 
 ## Core Capabilities
 
-- **Live Physical Chrome CDP Attach (`spector_attach`, `spector_tabs`):** Connects to local Chrome (`localhost`, `127.0.0.1`, `::1`), preserving cookies, auth sessions, and `.test`/Docker domains without closing your browser on disconnect.
+- **Session-Preserving Chrome Attach (`spector_attach`, `spector_tabs`):** Connects to local Chrome (`localhost`, `127.0.0.1`, `::1`), keeping cookies, auth sessions, and `.test`/Docker domains intact without closing your browser on disconnect. Navigates local dev or same-origin routes with automatic per-tab log clearing (`clearLogsOnNavigate: true`).
 - **Point → Annotate → Send Overlay (`Alt + P` & `spector_picker`):**
   - Click an element or drag a region automatically (no mode toggles).
-  - Step up/down the DOM tree with `↑`/`↓` (or `Shift + Scroll`) before locking selection.
-  - Floating popover for optional notes, multi-pin queueing (`+ Pin`), and cross-tab Target A vs Reference B comparison.
-  - **Auto-Forensics on Pin:** Automatically attaches overridden CSS cascade rules and targeted layout traps (overflow, sticky clipping, stacking context, inactive CSS) when anomalies exist.
-  - **Before/After Pin Verification (`action: "verify"`):** Re-captures a pinned selector after code edits/HMR and returns exact `rectDelta`, `styleChanges`, `forensicsDelta`, and a fresh cropped PNG.
-- **Layout & CSS Cascade Forensics (`spector_diagnose`):** Pinpoints horizontal overflow culprits, clipping/z-index traps, inactive CSS hints, broken media/fonts, CDP CSS cascade overrides (`@layer` & specificity), multi-breakpoint overflow, and active-tab console/network errors.
-- **Multi-Breakpoint Visual Snapshots (`spector_capture_screenshot`):** Captures element, page, or `mobile`/`tablet`/`desktop` PNG screenshots with optional `colorScheme`/`reducedMotion` emulation and automatic viewport restoration.
+  - Step up or down the DOM tree with `↑`/`↓` (or `Shift + Scroll`) before locking selection.
+  - Add notes in the floating popover, queue multiple pins (`+ Pin`), or compare Target A vs Reference B across tabs.
+  - **Auto-Forensics on Pin:** Attaches overridden CSS cascade rules and targeted layout traps (overflow, sticky clipping, stacking context, inactive CSS) whenever anomalies exist.
+  - **Before/After Pin Verification (`action: "verify"`):** Re-captures a pinned selector after code edits or HMR and returns `rectDelta`, `styleChanges`, `forensicsDelta`, and a cropped PNG.
+- **Compact UI & CSS Forensics (`spector_diagnose`):**
+  - **Grouped compact output (`detail: "compact"` default):** Collapses repetitive findings by selector pattern (e.g. table rows) to keep context lean; pass `detail: "full"` for raw ungrouped arrays.
+  - **Layout & clipping traps:** Detects document horizontal overflow, scrollable table overflow (`internalHorizontalScroll`), viewport/container-clipped interactive elements (`clippedInViewport`), sticky/z-index traps, inactive CSS, and broken images/fonts, with smart table-row sampling when pages exceed `maxElements`.
+  - **WCAG AA & mobile touch targets:** Audits computed color contrast, missing accessible names, heading hierarchy, and mobile `<44px` touch targets (including top-10 selectors in `breakpointAudits` or via `viewport: "mobile"`).
+  - **DOM → Source File Mapping (`sourceFile`):** Resolves dev-mode component paths for Vue 3/Nuxt (`__vueParentComponent`), React 17/18 (`_debugSource`), and React 19 (`_debugStack`).
+  - **Before vs After Session Diff (`delta`) & Clean Logs:** Tracks lightweight per-URL baselines to report metric deltas across runs, and isolates console/network errors by `current-document`, `active-tab`, or `browser-session`.
+- **Multi-Breakpoint & Multi-Theme Snapshots (`spector_capture_screenshot`):** Captures element, page, `mobile`/`tablet`/`desktop` breakpoints, and batch `colorSchemes: ["light", "dark"]` PNGs with optional `reducedMotion`, `hideDevtoolsOverlays` (Nuxt, Vue, Next.js, Vite, TanStack), and `hideSelectors`, restoring the original viewport and styles afterward.
 
 ---
 
@@ -55,11 +60,11 @@ Spector communicates over `stdin`/`stdout` (internal logs go to `stderr`). Start
 | Tool | Purpose |
 | :--- | :--- |
 | `spector_attach` | Connects to a local Chrome CDP endpoint (auto-launches if enabled). |
-| `spector_tabs` | Lists open tabs (`"list"`), switches active tab (`"select"`), reloads (`"reload"`), or navigates local dev / same-origin routes (`"navigate"`). |
-| `spector_picker` | Retrieves `Alt+P` Blueprints + auto-forensics (`"get"`), opens overlay (`"pick"`), programmatically snapshots a selector (`"snapshot"`), checks Before vs After diffs (`"verify"`), or clears queue (`"clear"`). |
-| `spector_diagnose` | Runs layout traps (`rootSelector`, `maxElements`), WCAG AA contrast & mobile touch-target audit, optional design-token distribution (`includeTokens`), CDP CSS cascade, multi-breakpoint overflow, and active-tab console/network logs (`clearLogs: false` default). |
-| `spector_capture_screenshot` | Captures element, page, `mobile`/`tablet`/`desktop` breakpoints, and/or batch `colorSchemes: ["light", "dark"]` PNG screenshots with automatic viewport & media restoration. |
-| `spector_interact` | Minimal UI inspection triggers (`click`, `hover`, `scrollTo`) to open dropdowns, tabs, modals, or scroll sections during visual audits. |
+| `spector_tabs` | Lists open tabs (`"list"`), switches active tab (`"select"`), reloads (`"reload"`), or navigates local dev / same-origin routes (`"navigate"`, `clearLogsOnNavigate: true`). |
+| `spector_picker` | Retrieves `Alt+P` Blueprints + auto-forensics (`"get"`), opens the overlay (`"pick"`), snapshots a selector (`"snapshot"`), verifies Before vs After diffs (`"verify"`), or clears the queue (`"clear"`). |
+| `spector_diagnose` | Runs grouped (`detail: "compact"`) layout/scroll/clipping forensics, WCAG AA contrast & mobile touch targets (`viewport`), DOM→`sourceFile` mapping, optional design tokens (`includeTokens`), CDP CSS cascade, session `delta`, and scoped console/network logs (`runtimeScope`). |
+| `spector_capture_screenshot` | Captures element, page, `mobile`/`tablet`/`desktop` breakpoints, and batch `colorSchemes: ["light", "dark"]` PNGs with optional `hideDevtoolsOverlays` / `hideSelectors` and automatic viewport & media restoration. |
+| `spector_interact` | Triggers lightweight UI states (`click`, `hover`, `scrollTo`) to open dropdowns, tabs, modals, or scroll sections during visual audits. |
 
 ---
 
