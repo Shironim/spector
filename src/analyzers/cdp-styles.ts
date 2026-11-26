@@ -276,7 +276,12 @@ function rankDeclarationsByProperty(
       continue;
     }
 
-    const overridden = sorted.slice(1).map((loser) => {
+    const seenOverridden = new Set<string>();
+    const overridden: CssCascadeEntry['overridden'] = [];
+    for (const loser of sorted.slice(1)) {
+      if (loser.source === winner.source && loser.value === winner.value && loser.important === winner.important) {
+        continue;
+      }
       let reason = 'lower specificity or earlier rule order';
       if (winner.important && !loser.important) {
         reason = 'overridden by !important';
@@ -285,8 +290,11 @@ function rankDeclarationsByProperty(
       } else if (winner.layerOrder !== loser.layerOrder) {
         reason = winner.important ? 'overridden by earlier important cascade layer' : 'overridden by higher cascade layer';
       }
-      return { value: loser.value, source: loser.source, reason };
-    });
+      const dedupeKey = `${loser.source}|${loser.value}|${reason}`;
+      if (seenOverridden.has(dedupeKey)) continue;
+      seenOverridden.add(dedupeKey);
+      overridden.push({ value: loser.value, source: loser.source, reason });
+    }
 
     resultProps[propName] = {
       resolution: 'ranked',
@@ -300,6 +308,19 @@ function rankDeclarationsByProperty(
 
   return resultProps;
 }
+
+const FALLBACK_COMPUTED_PROPERTIES = [
+  'display',
+  'position',
+  'width',
+  'height',
+  'padding',
+  'margin',
+  'overflow',
+  'color',
+  'background-color',
+  'font-size'
+] as const;
 
 export async function explainCssCascade(
   page: Page,
@@ -344,9 +365,31 @@ export async function explainCssCascade(
       }
     }
 
+    const hasMatchedProps = Object.keys(resultProps).length > 0;
+    let computedSummary: Record<string, string> | undefined;
+    if (!hasMatchedProps && computedValues.size > 0) {
+      const summaryProps = properties && properties.length > 0
+        ? properties.map(p => p.toLowerCase())
+        : [...FALLBACK_COMPUTED_PROPERTIES];
+      const summary: Record<string, string> = {};
+      for (const prop of summaryProps) {
+        const val = computedValues.get(prop);
+        if (val !== undefined) summary[prop] = val;
+      }
+      if (Object.keys(summary).length > 0) {
+        computedSummary = summary;
+      }
+    }
+
     return {
       selector,
       properties: resultProps,
+      ...(!hasMatchedProps
+        ? {
+            note: 'No direct author CSS rules matched tracked properties on this element; showing observed computed values.',
+            ...(computedSummary ? { computedSummary } : {})
+          }
+        : {}),
       ...(Object.keys(pseudoElements).length > 0 ? { pseudoElements } : {})
     };
   });

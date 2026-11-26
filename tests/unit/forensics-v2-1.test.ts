@@ -122,4 +122,78 @@ describe('Spector Forensics Enhancements', () => {
     expect(report.pseudoElements?.before?.['border-radius']?.winningValue).toBe('8px');
     expect(report.pseudoElements?.after).toBeUndefined();
   });
+
+  test('explainCssCascade deduplicates identical overridden rules and returns computedSummary when no author rules match', async () => {
+    let matchedRules: any[] = [
+      {
+        rule: {
+          origin: 'regular',
+          selectorList: { text: 'aside.fixed' },
+          style: { cssProperties: [{ name: 'width', value: '240px' }] }
+        }
+      },
+      {
+        rule: {
+          origin: 'regular',
+          selectorList: { text: 'aside.fixed' },
+          style: { cssProperties: [{ name: 'width', value: '240px' }] }
+        }
+      },
+      {
+        rule: {
+          origin: 'regular',
+          selectorList: { text: 'aside.fixed.w-64' },
+          style: { cssProperties: [{ name: 'width', value: '256px' }] }
+        }
+      },
+      {
+        rule: {
+          origin: 'regular',
+          selectorList: { text: 'aside.fixed.w-64' },
+          style: { cssProperties: [{ name: 'width', value: '256px' }] }
+        }
+      }
+    ];
+
+    const fakePage = {
+      context: () => ({
+        newCDPSession: async () => ({
+          send: async (method: string) => {
+            if (method === 'DOM.getDocument') return { root: { nodeId: 1 } };
+            if (method === 'DOM.querySelector') return { nodeId: 99 };
+            if (method === 'CSS.getComputedStyleForNode') {
+              return {
+                computedStyle: [
+                  { name: 'display', value: 'block' },
+                  { name: 'width', value: '256px' },
+                  { name: 'padding', value: '24px' }
+                ]
+              };
+            }
+            if (method === 'CSS.getMatchedStylesForNode') {
+              return { matchedCSSRules: matchedRules, pseudoElements: [] };
+            }
+            return {};
+          },
+          detach: async () => {}
+        })
+      })
+    } as any;
+
+    const deduped = await explainCssCascade(fakePage, 'aside.fixed', ['width']);
+    expect(deduped.properties.width?.winningValue).toBe('256px');
+    expect(deduped.properties.width?.overridden).toEqual([
+      { value: '240px', source: 'aside.fixed', reason: 'lower specificity or earlier rule order' }
+    ]);
+
+    matchedRules = [];
+    const emptyAuthor = await explainCssCascade(fakePage, 'main');
+    expect(emptyAuthor.properties).toEqual({});
+    expect(emptyAuthor.note).toContain('No direct author CSS rules matched');
+    expect(emptyAuthor.computedSummary).toEqual({
+      display: 'block',
+      width: '256px',
+      padding: '24px'
+    });
+  });
 });

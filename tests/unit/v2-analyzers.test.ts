@@ -583,4 +583,103 @@ describe('Spector v2 Analyzers & Multi-Pin Architecture', () => {
     assert.ok(report.inactiveCss.some(h => h.selector === '#static-z' && h.property === 'gap'));
     assert.ok(report.inactiveCss.some(h => h.selector === '#inline-span' && h.property === 'marginTop'));
   });
+
+  it('skips hidden ancestors (avoiding 0x0 svg false positives), supports rootSelector scoping, and enforces maxElements', async () => {
+    class ElementMock {
+      nodeType = 1;
+      tagName = 'DIV';
+      id = '';
+      parentElement: any = null;
+      _cs: Record<string, string> = {};
+      _descendants: any[] = [];
+      getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 20, left: 0, right: 100 }; }
+      getAttribute() { return null; }
+      closest() { return null; }
+      contains() { return false; }
+      querySelectorAll() { return this._descendants; }
+    }
+    class HTMLElementMock extends ElementMock {}
+    class SVGElementMock extends ElementMock {
+      override tagName = 'svg';
+      override getBoundingClientRect() { return { x: 0, y: 0, width: 0, height: 0, left: 0, right: 0 }; }
+    }
+    class HTMLImageElementMock extends HTMLElementMock {}
+
+    const bodyEl: any = new HTMLElementMock();
+    bodyEl.tagName = 'BODY';
+    bodyEl._cs = { display: 'block', visibility: 'visible' };
+
+    const hiddenBtn: any = new HTMLElementMock();
+    hiddenBtn.id = 'mobile-only-btn';
+    hiddenBtn.parentElement = bodyEl;
+    hiddenBtn._cs = { display: 'none', visibility: 'visible' };
+
+    const hiddenSvg: any = new SVGElementMock();
+    hiddenSvg.id = 'hidden-icon';
+    hiddenSvg.parentElement = hiddenBtn;
+    hiddenSvg._cs = { display: 'inline', visibility: 'visible' };
+
+    const mainEl: any = new HTMLElementMock();
+    mainEl.tagName = 'MAIN';
+    mainEl.id = 'main-area';
+    mainEl.parentElement = bodyEl;
+    mainEl._cs = { display: 'block', visibility: 'visible' };
+
+    const visibleBrokenSvg: any = new SVGElementMock();
+    visibleBrokenSvg.id = 'broken-visible-icon';
+    visibleBrokenSvg.parentElement = mainEl;
+    visibleBrokenSvg._cs = { display: 'inline', visibility: 'visible' };
+
+    const extraCard: any = new HTMLElementMock();
+    extraCard.id = 'extra-card';
+    extraCard.parentElement = mainEl;
+    extraCard._cs = { display: 'block', visibility: 'visible' };
+
+    mainEl._descendants = [visibleBrokenSvg, extraCard];
+
+    const allNodes = [hiddenBtn, hiddenSvg, mainEl, visibleBrokenSvg, extraCard];
+    const page = {
+      evaluate: async (fnOrExpr: Function | string) =>
+        vm.runInContext(
+          typeof fnOrExpr === 'string' ? fnOrExpr : `(${fnOrExpr.toString()})()`,
+          vm.createContext({
+            URL,
+            CSS: { escape: (s: string) => s },
+            HTMLElement: HTMLElementMock,
+            SVGElement: SVGElementMock,
+            HTMLImageElement: HTMLImageElementMock,
+            document: {
+              documentElement: { clientWidth: 1280, scrollWidth: 1280 },
+              body: bodyEl,
+              querySelector: (sel: string) => (sel === 'main' ? mainEl : null),
+              querySelectorAll: (sel: string) => {
+                if (sel === 'body *') return allNodes;
+                if (sel.startsWith('#')) return allNodes.filter(n => n.id === sel.slice(1));
+                return [];
+              },
+              fonts: []
+            },
+            window: { innerWidth: 1280, getComputedStyle: (el: any) => el._cs }
+          })
+        )
+    };
+
+    const fullReport = await runLayoutForensics(page as any);
+    assert.equal(fullReport.brokenMedia.length, 1);
+    assert.equal(fullReport.brokenMedia[0].selector, '#broken-visible-icon');
+    assert.equal(fullReport.coverage?.skippedHiddenElements, 2);
+    assert.equal(fullReport.coverage?.visitedElements, 3);
+    assert.equal(fullReport.coverage?.elementLimitReached, false);
+
+    const scopedReport = await runLayoutForensics(page as any, { rootSelector: 'main', maxElements: 2 });
+    assert.equal(scopedReport.coverage?.scope, 'scoped-light-dom');
+    assert.equal(scopedReport.coverage?.rootSelector, 'main');
+    assert.equal(scopedReport.coverage?.visitedElements, 2);
+    assert.equal(scopedReport.coverage?.elementLimitReached, true);
+
+    await assert.rejects(
+      () => runLayoutForensics(page as any, { rootSelector: '#non-existent' }),
+      /Root selector "#non-existent" not found/
+    );
+  });
 });

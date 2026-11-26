@@ -1,15 +1,33 @@
 import type { Page } from 'playwright-core';
 import type { LayoutForensicsReport } from '../types.js';
 import { evaluateInPage } from '../utils/cdp.js';
-import { IN_BROWSER_CSS_SELECTOR_FN, IN_BROWSER_SANITIZE_PATH_FN } from '../utils/selector.js';
+import { escapeTailwindSelector, IN_BROWSER_CSS_SELECTOR_FN, IN_BROWSER_SANITIZE_PATH_FN } from '../utils/selector.js';
+import { SpectorError } from '../utils/mcp-response.js';
 import { TOKEN_BUDGETS } from '../constants.js';
 
-export async function runLayoutForensics(page: Page): Promise<LayoutForensicsReport> {
+export interface LayoutForensicsOptions {
+  rootSelector?: string;
+  maxElements?: number;
+}
+
+export async function runLayoutForensics(
+  page: Page,
+  options?: LayoutForensicsOptions
+): Promise<LayoutForensicsReport> {
   const maxIssues = TOKEN_BUDGETS.MAX_DIAGNOSE_ISSUES;
+  const maxElements = Math.min(
+    Math.max(1, Math.floor(options?.maxElements ?? TOKEN_BUDGETS.DEFAULT_DIAGNOSE_MAX_ELEMENTS)),
+    TOKEN_BUDGETS.MAX_DIAGNOSE_MAX_ELEMENTS
+  );
+  const rawRootSelector = options?.rootSelector?.trim() || undefined;
+  const escapedRootSelector = rawRootSelector ? escapeTailwindSelector(rawRootSelector) : undefined;
 
   // Execute via string evaluation so pages with strict CSP (no unsafe-eval) do not block diagnostics.
   const script = `(() => {
     const maxIssues = ${maxIssues};
+    const maxElements = ${maxElements};
+    const rawRootSelector = ${JSON.stringify(rawRootSelector ?? null)};
+    const escapedRootSelector = ${JSON.stringify(escapedRootSelector ?? null)};
     ${IN_BROWSER_CSS_SELECTOR_FN}
     ${IN_BROWSER_SANITIZE_PATH_FN}
 
@@ -22,6 +40,34 @@ export async function runLayoutForensics(page: Page): Promise<LayoutForensicsRep
       }
       return cs;
     };
+
+    const hiddenCache = new WeakMap();
+    const isHiddenOrInHiddenAncestor = (el) => {
+      const cached = hiddenCache.get(el);
+      if (cached !== undefined) return cached;
+      const cs = getStyle(el);
+      if (!cs || cs.display === 'none' || cs.visibility === 'hidden' || cs.contentVisibility === 'hidden') {
+        hiddenCache.set(el, true);
+        return true;
+      }
+      const parent = el.parentElement;
+      const hidden = parent && parent !== document.documentElement
+        ? isHiddenOrInHiddenAncestor(parent)
+        : false;
+      hiddenCache.set(el, hidden);
+      return hidden;
+    };
+
+    let rawElements;
+    if (escapedRootSelector) {
+      const rootEl = document.querySelector(escapedRootSelector);
+      if (!rootEl) {
+        return { __spectorRootMissing: true };
+      }
+      rawElements = [rootEl, ...Array.from(rootEl.querySelectorAll('*'))];
+    } else {
+      rawElements = Array.from(document.querySelectorAll('body *'));
+    }
 
     const docEl = document.documentElement;
     const clientWidth = docEl.clientWidth || window.innerWidth;
@@ -38,8 +84,10 @@ export async function runLayoutForensics(page: Page): Promise<LayoutForensicsRep
     const isCssSet = (val, defaults) => Boolean(val && !defaults.includes(val));
     const replacedTags = new Set(['img', 'svg', 'input', 'button', 'select', 'textarea', 'canvas', 'video', 'iframe']);
 
-    const elements = Array.from(document.querySelectorAll('body *')).filter(el => !el.closest('[data-spector-activity]'));
-    const scanCap = Math.min(elements.length, 600);
+    const elements = rawElements.filter(el => !el.closest('[data-spector-activity]'));
+    let visitedElements = 0;
+    let skippedHiddenElements = 0;
+    let elementLimitReached = false;
 
     const hasScrollableAncestor = (el) => {
       let p = el.parentElement;
@@ -55,11 +103,19 @@ export async function runLayoutForensics(page: Page): Promise<LayoutForensicsRep
 
     const overflowCandidates = [];
 
-    for (let i = 0; i < scanCap; i++) {
+    for (let i = 0; i < elements.length; i++) {
       const el = elements[i];
       if (!(el instanceof HTMLElement || el instanceof SVGElement)) continue;
+      if (isHiddenOrInHiddenAncestor(el)) {
+        skippedHiddenElements++;
+        continue;
+      }
+      if (visitedElements >= maxElements) {
+        elementLimitReached = true;
+        break;
+      }
+      visitedElements++;
       const cs = getStyle(el);
-      if (cs.display === 'none' || cs.visibility === 'hidden') continue;
 
       const rect = el.getBoundingClientRect();
       const visuallyHidden = rect.width <= 1 && rect.height <= 1 &&
@@ -280,10 +336,15 @@ export async function runLayoutForensics(page: Page): Promise<LayoutForensicsRep
 
     return {
       coverage: {
-        scope: 'document-light-dom', candidateElements: elements.length, visitedElements: scanCap,
-        elementLimitReached: elements.length > scanCap, issueLimitPerCategory: maxIssues,
+        scope: rawRootSelector ? 'scoped-light-dom' : 'document-light-dom',
+        ...(rawRootSelector ? { rootSelector: rawRootSelector } : {}),
+        candidateElements: Math.max(visitedElements, elements.length - skippedHiddenElements),
+        visitedElements,
+        ...(skippedHiddenElements > 0 ? { skippedHiddenElements } : {}),
+        elementLimitReached,
+        issueLimitPerCategory: maxIssues,
         categoriesAtLimit: Object.entries({ culprits, clippingTraps, stackingTraps, brokenMedia, fontIssues, inactiveCss }).filter(([, items]) => items.length >= maxIssues).map(([name]) => name),
-        excluded: ['iframe-documents', 'shadow-roots', 'display-none', 'visibility-hidden']
+        excluded: ['iframe-documents', 'shadow-roots', 'display-none', 'visibility-hidden', 'hidden-ancestors']
       },
       horizontalOverflow: {
         hasOverflow,
@@ -299,5 +360,9 @@ export async function runLayoutForensics(page: Page): Promise<LayoutForensicsRep
     };
   })()`;
 
-  return await evaluateInPage(page, script);
+  const result = await evaluateInPage(page, script);
+  if (result && typeof result === 'object' && '__spectorRootMissing' in result) {
+    throw new SpectorError('ELEMENT_NOT_READY', `Root selector "${rawRootSelector}" not found in active document.`);
+  }
+  return result as LayoutForensicsReport;
 }
