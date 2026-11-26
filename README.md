@@ -31,8 +31,27 @@
 
 ### 1. Install & Initialize
 
+**Standalone binary (no Node.js or Bun required):**
+
+```bash
+# Linux & macOS (x64 / arm64)
+curl -fsSL https://raw.githubusercontent.com/Shironim/spector/master/install.sh | sh
+```
+
+```powershell
+# Windows (PowerShell x64)
+irm https://raw.githubusercontent.com/Shironim/spector/master/install.ps1 | iex
+```
+
+**Or via npm:**
+
 ```bash
 npm i -g @dimassetoid/spector
+```
+
+Then initialize the `spector-inspect` skill in your project:
+
+```bash
 spector init
 ```
 
