@@ -17,6 +17,7 @@ Connects Spector to a local Google Chrome instance over Chrome DevTools Protocol
 | `autoLaunch` | `boolean` | `true` | Launches a dedicated Chrome dev profile using the port from `cdpUrl` if Chrome is not already running (skipped for `ws://`/`wss://` endpoints). |
 
 ### Behavior & Invariants
+- **Launch Failure:** An unavailable Chrome executable returns structured `CHROME_CDP_UNAVAILABLE` guidance; it does not terminate the MCP server. Successful process spawn is followed by CDP readiness polling before reconnecting.
 - **On-Demand Auto-Attach:** Other browser tools call `manager.ensurePage()`, which can attach or auto-launch Chrome automatically. Explicit `spector_attach` is primarily needed for a custom `cdpUrl` or `autoLaunch: false`.
 - **Clean Disconnect:** On MCP shutdown (stdin EOF, SIGINT, SIGTERM), Spector removes telemetry listeners and disconnects CDP **without closing your physical Chrome process**.
 
@@ -24,7 +25,7 @@ Connects Spector to a local Google Chrome instance over Chrome DevTools Protocol
 
 ## 2. `spector_tabs`
 
-Unified tab discovery and switching tool (replaces the earlier separate `spector_list_tabs` and `spector_select_tab` tools).
+Unified tab discovery and switching tool.
 
 ### Parameters
 

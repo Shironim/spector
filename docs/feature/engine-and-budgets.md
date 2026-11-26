@@ -43,8 +43,8 @@ Every read/capture operation records metadata with a session-local `targetId`, s
 | **Screenshot Size / Pixels** | `6 MiB` PNG / `12,000,000` physical pixels | `RESOURCE_LIMIT_EXCEEDED` |
 | **Browser Picker Payload** | `512 KiB` / `10` pins (`MAX_PIN_QUEUE`) | Validated by Zod before collection. |
 | **DOM Tree** | `1000` nodes / `64,000` chars / depth `8` | Truncated with explicit coverage header. |
-| **Diagnose Issues / Subtree** | `15` issues / `150` subtree elements | Reported with `coverage` limit indicators. |
-| **Tokens / CSS Variables** | `300` elements / `50` `:root` variables | Reported with `coverage` limit indicators. |
+| **Diagnose Issues / Subtree / A11y** | `15` issues per category / `150` subtree elements / `300` contrast scan elements | Reported with `coverage` limit indicators. |
+| **Tokens / CSS Variables** | `300` examined candidates / `50` `:root` variables | Hidden subtrees pruned; examined and sampled counts reported separately in `coverage`. |
 | **Console / Network Buffer** | `100` logs max / `8000` UTF-16 chars per message | Truncated messages marked with `textTruncated` & `originalTextLength`. |
 
 ---
@@ -52,7 +52,16 @@ Every read/capture operation records metadata with a session-local `targetId`, s
 ## 5. Fail-Safe Error Contract (`SpectorError`)
 
 All tool handlers use `instrumentHandler` and `failSafeResponse`, returning structured `SpectorError` codes with actionable `recommendation` guidance without leaking raw internal stack/socket details:
-- `INVALID_CDP_URL`, `CHROME_CDP_UNAVAILABLE`, `BROWSER_NOT_ATTACHED`, `BROWSER_CONTEXT_UNAVAILABLE`
+- `INVALID_CDP_ENDPOINT`, `CDP_ENDPOINT_DENIED`, `CHROME_CDP_UNAVAILABLE`, `BROWSER_NOT_ATTACHED`, `BROWSER_CONTEXT_UNAVAILABLE`
 - `TARGET_CHANGED`, `TAB_NOT_FOUND`, `ELEMENT_NOT_READY`
 - `NO_PICKED_ELEMENT`, `PICKER_CANCELLED`
-- `OPERATION_TIMEOUT`, `RESOURCE_LIMIT_EXCEEDED`, `VIEWPORT_RESTORE_FAILED`, `INVALID_TOOL_INPUT`
+- `OPERATION_TIMEOUT`, `RESOURCE_LIMIT_EXCEEDED`, `VIEWPORT_RESTORE_FAILED`, `INVALID_TOOL_INPUT`, `TOOL_OPERATION_FAILED`
+
+## 6. Local and Release Verification
+
+- `bun test tests/unit` checks unit and profile contracts, including missing-executable recovery in a separate Linux process.
+- `bunx --no-install tsc --noEmit` checks source types.
+- `bun run test:regressions` builds a fresh `dist` and runs browser regression tests, including source/artifact tool-name contracts for `forensics` (7 tools) and `full` (10 tools). Tests requiring interactions select `full` explicitly.
+- Browser tests launch disposable headless Chrome instances. Set `SPECTOR_TEST_CHROME` to the test browser executable; local fallback is `/usr/bin/google-chrome`.
+- The separate `bun run test:live` script targets physical Chrome CDP on port `9222` (auto-launch allowed) and selects the `full` profile. It navigates/interacts with that browser and is not part of the disposable regression gate.
+- The release workflow installs Chromium for the locked Playwright dependency in a Linux browser-regression job. Publishing depends on both that gate and the platform binary build matrix. This does not establish browser runtime parity on macOS/Windows; matrix smoke checks cover version/help startup there.

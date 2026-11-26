@@ -6,7 +6,7 @@ Source: [src/tools/picker.ts](../../src/tools/picker.ts), [src/browser/overlay-s
 
 ## 1. Overview
 
-`spector_picker` unifies developer-initiated pinning (`Alt + P` hotkey) and AI-initiated overlay picking into a single tool (`action: "get" | "pick" | "clear"`). It replaces the earlier separate `spector_get_last_picked` and `spector_pick_element` tools.
+`spector_picker` unifies developer-initiated pinning (`Alt + P` hotkey) and AI-initiated overlay picking into a single tool (`action: "get" | "pick" | "clear"`).
 
 ---
 
@@ -39,8 +39,10 @@ Each picked pin includes:
 When both **Reference (B)** (e.g. on a reference website tab) and **Target (A)** (on the local project tab) are pinned, `spector_picker({ action: "get" })` returns both pins plus a computed `comparison` diff (`dimensionDelta`, `styleDiffs`, `hoverDiffs`).
 
 ### Live Enrichment & Staleness
-- Requested `:hover` / `:focus-visible` enrichment reports `captured`, `failed`, `stale`, or `unavailable` without mutating the stored snapshot.
-- If the underlying document or DOM element was replaced since the pin was captured, enrichment reports `stale` and omits stale hover/focus data.
+- **Enrichment Statuses:** Requested `:hover` / `:focus-visible` enrichment reports `captured`, `failed`, `stale`, or `unavailable` without mutating the stored snapshot.
+- **Active-Tab Scope:** Enrichment applies only to pins from the active target; pins from other tabs retain their historical snapshots (reading them is not a live validation of those tabs).
+- **Stale / Failed Handling:** If the active document or DOM element was replaced since capture, enrichment reports `stale`. Requested hover/focus deltas are omitted when status is `stale`, `failed`, or `unavailable`.
+- **A/B `hoverDiffs`:** Omitted if either pin explicitly carries an unsuccessful hover enrichment status; cached snapshots without an unsuccessful status remain comparable.
 
 ---
 
