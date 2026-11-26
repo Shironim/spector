@@ -132,7 +132,7 @@ async function run() {
 
   const transport = new StdioClientTransport({
     command: 'node',
-    args: [distEntry]
+    args: [distEntry, 'serve', '--profile', 'full']
   });
 
   const client = new Client({ name: 'spector-verifier', version: '2.0.0' }, { capabilities: {} });
