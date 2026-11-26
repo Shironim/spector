@@ -50,15 +50,16 @@ Spector communicates over `stdin`/`stdout` (internal logs go to `stderr`). Start
 
 ---
 
-## Tools Reference (5 Core Tools)
+## Tools Reference (6 Core Tools)
 
 | Tool | Purpose |
 | :--- | :--- |
 | `spector_attach` | Connects to a local Chrome CDP endpoint (auto-launches if enabled). |
-| `spector_tabs` | Lists open tabs (`action: "list"`) or switches active tab (`action: "select"`). |
-| `spector_picker` | Retrieves `Alt+P` Blueprints + auto-forensics (`"get"`), opens overlay (`"pick"`), checks Before vs After diffs after edits (`"verify"`), or clears queue (`"clear"`). |
-| `spector_diagnose` | Runs layout traps, CDP CSS cascade explanation, multi-breakpoint overflow audit, and active-tab console/network logs. |
-| `spector_capture_screenshot` | Captures element, page, or `mobile`/`tablet`/`desktop` PNG screenshots with media emulation and viewport restoration. |
+| `spector_tabs` | Lists open tabs (`"list"`), switches active tab (`"select"`), reloads (`"reload"`), or navigates local dev / same-origin routes (`"navigate"`). |
+| `spector_picker` | Retrieves `Alt+P` Blueprints + auto-forensics (`"get"`), opens overlay (`"pick"`), programmatically snapshots a selector (`"snapshot"`), checks Before vs After diffs (`"verify"`), or clears queue (`"clear"`). |
+| `spector_diagnose` | Runs layout traps (`rootSelector`, `maxElements`), WCAG AA contrast & mobile touch-target audit, optional design-token distribution (`includeTokens`), CDP CSS cascade, multi-breakpoint overflow, and active-tab console/network logs (`clearLogs: false` default). |
+| `spector_capture_screenshot` | Captures element, page, `mobile`/`tablet`/`desktop` breakpoints, and/or batch `colorSchemes: ["light", "dark"]` PNG screenshots with automatic viewport & media restoration. |
+| `spector_interact` | Minimal UI inspection triggers (`click`, `hover`, `scrollTo`) to open dropdowns, tabs, modals, or scroll sections during visual audits. |
 
 ---
 
