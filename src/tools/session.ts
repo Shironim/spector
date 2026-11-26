@@ -92,7 +92,12 @@ export function registerSessionTools(
       .min(500)
       .max(60000)
       .optional()
-      .describe('Optional navigation/reload timeout in milliseconds (default: 15000)')
+      .describe('Optional navigation/reload timeout in milliseconds (default: 15000)'),
+    clearLogsOnNavigate: z
+      .boolean()
+      .optional()
+      .default(true)
+      .describe('Clear buffered console/failed-network logs for the active tab before navigating or reloading (default: true)')
   };
 
   server.registerTool(
@@ -117,9 +122,10 @@ export function registerSessionTools(
       waitUntil?: 'load' | 'domcontentloaded' | 'networkidle';
       openInNewTab?: boolean;
       timeoutMs?: number;
+      clearLogsOnNavigate?: boolean;
     }>(
       'spector_tabs',
-      async ({ action, index, url, title, latest, waitUntil, openInNewTab, timeoutMs }) => {
+      async ({ action, index, url, title, latest, waitUntil, openInNewTab, timeoutMs, clearLogsOnNavigate }) => {
         const effectiveAction =
           action ?? (index !== undefined || url !== undefined || title !== undefined || latest === true ? 'select' : 'list');
         if (effectiveAction === 'list') {
@@ -132,7 +138,8 @@ export function registerSessionTools(
             url: url ?? '',
             waitUntil,
             openInNewTab,
-            timeoutMs
+            timeoutMs,
+            clearLogsOnNavigate
           });
           return jsonResponse({
             status: 'navigated',
@@ -145,7 +152,7 @@ export function registerSessionTools(
         }
 
         if (effectiveAction === 'reload') {
-          const result = await manager.reloadTab({ waitUntil, timeoutMs });
+          const result = await manager.reloadTab({ waitUntil, timeoutMs, clearLogsOnNavigate });
           return jsonResponse({
             status: 'reloaded',
             activeTab: {
