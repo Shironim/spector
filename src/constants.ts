@@ -1,4 +1,4 @@
-export const SPECTOR_VERSION = '1.0.4';
+export const SPECTOR_VERSION = '1.1.0';
 
 export const TIMEOUTS = {
   CDP_CONNECT_MS: 10000,
