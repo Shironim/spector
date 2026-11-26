@@ -7,7 +7,7 @@ import { CdpSessionManager } from '../../src/browser/cdp-session.js';
 import { coreToolNames } from '../tool-contract.js';
 
 describe('MCP Tool Registration & Wire-Level Protocol Contract (Spector Slim)', () => {
-  it('registers exactly the 5 core tools with MCP annotations over real InMemoryTransport', async () => {
+  it('registers exactly the 6 core tools with MCP annotations over real InMemoryTransport', async () => {
     const manager = new CdpSessionManager();
     const server = createSpectorServer(manager);
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -25,7 +25,6 @@ describe('MCP Tool Registration & Wire-Level Protocol Contract (Spector Slim)', 
       for (const removed of [
         'spector_navigate',
         'spector_get_dom_tree',
-        'spector_interact',
         'spector_preview_css',
         'spector_extract_tokens',
         'spector_list_tabs',

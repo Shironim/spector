@@ -12,6 +12,7 @@ import { registerSessionTools } from './tools/session.js';
 import { registerPickerTools } from './tools/picker.js';
 import { registerInspectTools } from './tools/inspect.js';
 import { registerDiagnoseTool } from './tools/diagnose.js';
+import { registerInteractTool } from './tools/interact.js';
 import { handleInitCommand, handleHelpCommand } from './cli/init.js';
 
 export function createSpectorServer(
@@ -26,6 +27,7 @@ export function createSpectorServer(
   registerPickerTools(server, manager);
   registerInspectTools(server, manager);
   registerDiagnoseTool(server, manager);
+  registerInteractTool(server, manager);
 
   return server;
 }
